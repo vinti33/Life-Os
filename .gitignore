@@ -1,0 +1,30 @@
+# General
+.DS_Store
+.vscode/
+.idea/
+
+# Python / Backend
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+*.log
+backend_debug.log
+backend_restart.log
+debug_output*.txt
+.env
+.env.*
+!.env.example
+target/
+
+# Node / Frontend (Redundant but safe)
+node_modules/
+npm-debug.log
+yarn-error.log
+.next/
+out/
+build/
+coverage/
+dist/

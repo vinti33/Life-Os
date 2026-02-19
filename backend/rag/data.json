@@ -1,0 +1,198 @@
+[
+  {
+    "id": "overspend_rule",
+    "text": "If a user overspends in a month, reduce discretionary spending next month and recover gradually."
+  },
+  {
+    "id": "workout_consistency",
+    "text": "If workouts are missed often, focus on shorter 15-minute high-intensity sessions."
+  },
+  {
+    "id": "daily_reading",
+    "text": "Prioritize 30 minutes of educational reading every night before sleep."
+  },
+  {
+    "id": "daily_exercise",
+    "text": "Schedule 45 minutes of exercise daily, preferably in the morning energy peak."
+  },
+  {
+    "text": "I reschedule my work.",
+    "source": "user_memory"
+  },
+  {
+    "text": "Move lunch",
+    "source": "user_memory"
+  },
+  {
+    "text": "I have a fixed time slot for eating in between waking hours",
+    "source": "user_memory"
+  },
+  {
+    "text": "I have a routine that includes having breakfast and getting ready between 7:30am and 9:45am.",
+    "source": "user_memory"
+  },
+  {
+    "text": "(none provided)",
+    "source": "user_memory"
+  },
+  {
+    "text": "I eat breakfasdt everyfrom Saturday and Sunday ",
+    "source": "user_memory"
+  },
+  {
+    "text": "I start work exactly five hours after midnight.",
+    "source": "user_memory"
+  },
+  {
+    "text": "breakfast from 07:31",
+    "source": "user_memory"
+  },
+  {
+    "text": "I eat meals at a specific time",
+    "source": "user_memory"
+  },
+  {
+    "text": "I wake up at 10 o'clock.",
+    "source": "user_memory"
+  },
+  {
+    "text": "I usually start my day with yoga before heading to work",
+    "source": "user_memory"
+  },
+  {
+    "text": "I start my day by waking up at exactly 6:45am",
+    "source": "user_memory"
+  },
+  {
+    "text": "morning rutine consists of 9-5 am\u8d77\u5e8a routine. Evening wind down consists of 10pm bedtime routine.",
+    "source": "user_memory"
+  },
+  {
+    "text": "set smaller task for the morning rutine.",
+    "source": "user_memory"
+  },
+  {
+    "text": "Break a morning rutine into small tasks to achieve your goals.",
+    "source": "user_memory"
+  },
+  {
+    "text": "Breaking habits takes time and effort. It's important to break the routine quickly, as this can lead to better behavior over time.",
+    "source": "user_memory"
+  },
+  {
+    "text": "Break morning routine into small tasks involves breaking the morning routine, taking small tasks to maintain consistency throughout the day. This method aims to simplify and make time appear more natural.",
+    "source": "user_memory"
+  },
+  {
+    "text": "break morning routine into small tasks",
+    "source": "user_memory"
+  },
+  {
+    "text": "Hello! How can I help you today?'}, { ",
+    "source": "user_memory"
+  },
+  {
+    "text": "An exercise to start your day",
+    "source": "user_memory"
+  },
+  {
+    "text": "Set up the morning routine. Identify the time to wake up, breakfast time, work time, or break time.",
+    "source": "user_memory"
+  },
+  {
+    "text": "Break a morning routine into smaller tasks",
+    "source": "user_memory"
+  },
+  {
+    "text": "preferred time | goal of learning French | breakfast taken at 08:00 and later taken again at 12:00.",
+    "source": "user_memory"
+  },
+  {
+    "text": " breakfast 08:00-09:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "breakfast is added to the schedule between 08 and 09 am.",
+    "source": "user_memory"
+  },
+  {
+    "text": "you added breakfast from 08:00 to 09:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "breakfast added",
+    "source": "user_memory"
+  },
+  {
+    "text": " Breakfast time changed from 07:00 to 08:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "breakfast is served between 09:00 and 08:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "added\u65e9\u9910 to hours 08:00 and 09:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "added\u65e9\u9910 time from 08:00 until 09:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "extracted statement added by user",
+    "source": "user_memory"
+  },
+  {
+    "text": "you already added breakfast to 8am and 9am).",
+    "source": "user_memory"
+  },
+  {
+    "text": "\u81b3\u98df\u7ea4\u7ef4\u88ab\u5220\u9664",
+    "source": "user_memory"
+  },
+  {
+    "text": "extracted statement",
+    "source": "user_memory"
+  },
+  {
+    "text": "extraction of statement. category = constraint or preference = preference or goal = goal.",
+    "source": "user_memory"
+  },
+  {
+    "text": "Remove breakfast from report",
+    "source": "user_memory"
+  },
+  {
+    "text": "",
+    "source": "user_memory"
+  },
+  {
+    "text": " Breaks morning routine into smaller tasks.",
+    "source": "user_memory"
+  },
+  {
+    "text": "unchanged Lunch time was changed from 13:00 to 14:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "move block 1 to 13",
+    "source": "user_memory"
+  },
+  {
+    "text": "the user's date of birth is 13/00.",
+    "source": "user_memory"
+  },
+  {
+    "text": "changing lunch time from 13:00 to 14:00",
+    "source": "user_memory"
+  },
+  {
+    "text": "switched focus session due to time constraints.",
+    "source": "user_memory"
+  },
+  {
+    "text": "=current time+15:00<= today's time. If they both are same, output 'same'. Otherwise output the current time.",
+    "source": "user_memory"
+  }
+]

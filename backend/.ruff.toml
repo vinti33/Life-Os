@@ -1,0 +1,19 @@
+# Ruff Linter Configuration for LifeOS Backend
+
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",   # Line too long (handled by line-length)
+    "E402",   # Module level import not at top of file
+    "F401",   # Unused imports (false positives with Beanie models)
+    "W291",   # Trailing whitespace
+    "W292",   # No newline at end of file
+    "W293",   # Whitespace before ':'
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["F811"]  # Fixture redefinition is expected in tests
+"__init__.py" = ["F401"]

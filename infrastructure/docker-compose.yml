@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: lifeos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27118:27017"
+    volumes:
+      - mongodb_data_v2:/data/db
+
+  backend:
+    build: ../backend
+    command: >
+      uvicorn main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ../backend:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../backend/.env
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+      - mongodb
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build: ../frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  mongodb_data_v2:
+
+

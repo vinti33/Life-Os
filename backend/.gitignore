@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Logs
+*.log
+backend_debug.log
+backend_restart.log
+debug_output*.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# Testing / Coverage
+.pytest_cache/
+coverage/
+.coverage
+htmlcov/

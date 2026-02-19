@@ -1,0 +1,471 @@
+"""
+LifeOS Planner Agent — Daily Schedule Generator with Retry Logic
+================================================================
+Generates structured daily plans via LLM, enforces work/school time
+locks, implements retry with exponential backoff, and JSON parse recovery.
+"""
+
+import json
+import re
+import asyncio
+from typing import Dict, Any, List
+from datetime import datetime
+import requests
+from config import settings
+from rag.manager import RAGManager
+from models import PlanType
+from utils.logger import get_logger, timed, PlannerError
+
+log = get_logger("planner_agent")
+
+# LLM retry configuration
+MAX_RETRIES = 2
+RETRY_BASE_DELAY_S = 1.0
+
+# Generic requests that skip RAG to save time
+_GENERIC_REQUESTS = frozenset([
+    "plan my day", "plan today", "what should i do",
+    "generate plan", "plan my day today",
+])
+
+
+# ---------------------------------------------------------------------------
+# Time Utilities
+# ---------------------------------------------------------------------------
+def time_to_minutes(t: str) -> int:
+    h, m = map(int, t.split(":"))
+    return h * 60 + m
+
+
+# ---------------------------------------------------------------------------
+# Hard Enforcement Layer
+# ---------------------------------------------------------------------------
+def enforce_work_school_lock(tasks: List[Dict[str, Any]], profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Strips non-work tasks from the locked work/school window."""
+    role = profile.get("role")
+    if role not in ("Working", "Student"):
+        return tasks
+
+    try:
+        start = time_to_minutes(profile.get("work_start_time"))
+        end = time_to_minutes(profile.get("work_end_time"))
+    except (ValueError, TypeError):
+        log.warning("Invalid work times in profile — skipping enforcement")
+        return tasks
+
+    safe_tasks = []
+    for task in tasks:
+        try:
+            t_start = time_to_minutes(task["start_time"])
+            t_end = time_to_minutes(task["end_time"])
+        except (ValueError, TypeError, KeyError):
+            log.warning(f"Task '{task.get('title', '?')}' has invalid times — keeping it")
+            safe_tasks.append(task)
+            continue
+
+        inside_locked_zone = not (t_end <= start or t_start >= end)
+
+        if not inside_locked_zone:
+            safe_tasks.append(task)
+            continue
+
+        is_work_task = task.get("category") in ("work", "learning")
+        is_lunch = (
+            task.get("title") == "Lunch Break"
+            and task.get("category") in ("personal", "health")
+            and 12 * 60 <= t_start <= 14 * 60
+            and (t_end - t_start) <= 60
+        )
+
+        if is_work_task or is_lunch:
+            safe_tasks.append(task)
+        else:
+            log.debug(f"Enforced: stripped '{task.get('title')}' from locked zone")
+
+    return safe_tasks
+
+
+# ---------------------------------------------------------------------------
+# JSON Recovery
+# ---------------------------------------------------------------------------
+def _recover_json(text: str) -> dict | None:
+    """Attempts to extract JSON from mixed LLM output (text + JSON)."""
+    # Try to find a JSON object in the text
+    match = re.search(r'\{[\s\S]*\}', text)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def _sanitize_tasks(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fixes invalid categories and times from LLM output."""
+    valid_categories = {"work", "health", "learning", "finance", "personal", "other"}
+    
+    for task in tasks:
+        # 1. Sanitize Category
+        cat = str(task.get("category", "other")).lower().strip()
+        if "|" in cat:
+            cat = cat.split("|")[0].strip()
+        
+        if cat not in valid_categories:
+            if cat in ("social", "socializing", "fun", "entertainment"):
+                cat = "personal"
+            elif cat in ("transport", "commute", "travel"):
+                cat = "other"
+            elif cat in ("study", "reading"):
+                cat = "learning"
+            elif cat in ("gym", "exercise", "meditation"):
+                cat = "health"
+            elif cat in ("job", "meeting", "email"):
+                cat = "work"
+            else:
+                cat = "other"
+        task["category"] = cat
+
+        # 2. Sanitize Times (Handle ints/malformed strings)
+        for field in ("start_time", "end_time"):
+            val = task.get(field)
+            if val is None:
+                continue
+            
+            # Handle integers (e.g. 0 -> "00:00", 900 -> "09:00", 9 -> "09:00")
+            if isinstance(val, (int, float)):
+                val = int(val)
+                if val == 0:
+                    val = "00:00"
+                elif 0 < val <= 24: # e.g. 9 -> 09:00
+                    val = f"{val:02d}:00"
+                elif val >= 100: # e.g. 900 -> 09:00
+                     h = val // 100
+                     m = val % 100
+                     val = f"{h:02d}:{m:02d}"
+                else:
+                    val = None # Discard weird numbers
+            
+            # Ensure output is string
+            if val is not None:
+                val = str(val).strip()
+                # Basic check for HH:MM format
+                if not re.match(r"^\d{2}:\d{2}$", val):
+                     # Try to fix simple "9:00" -> "09:00"
+                     if re.match(r"^\d{1}:\d{2}$", val):
+                         val = "0" + val
+                     else:
+                         val = None # Invalid format
+            
+            task[field] = val
+
+    return tasks
+
+
+# ---------------------------------------------------------------------------
+# Planner Agent
+# ---------------------------------------------------------------------------
+class PlannerAgent:
+    def __init__(self, rag_manager: RAGManager | None = None):
+        # We use requests + asyncio.to_thread because AsyncOpenAI/httpx 
+        # has connectivity issues in this environment (likely IPv6/localhost resolution)
+        self.api_key = settings.OPENAI_API_KEY
+        self.base_url = settings.OPENAI_BASE_URL
+        if self.base_url.endswith("/"):
+            self.base_url = self.base_url[:-1]
+        self.rag_manager = rag_manager
+
+    async def _call_llm(self, system_prompt: str) -> dict:
+        """
+        Executes LLM call via requests (sync) wrapped in asyncio.to_thread 
+        to bypass httpx/asyncio networking issues.
+        """
+        def _sync_request():
+            url = f"{self.base_url}/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            payload = {
+                "model": settings.AI_MODEL,
+                "messages": [{"role": "system", "content": system_prompt}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2,
+                "max_tokens": 2500,
+            }
+            # 180s timeout to prevent hanging on slow CPUs
+            r = requests.post(url, json=payload, headers=headers, timeout=180)
+            r.raise_for_status()
+            return r.json()
+
+        return await asyncio.to_thread(_sync_request)
+
+    @timed("planner_agent")
+    async def generate(self, system_prompt: str, response_model: Any) -> Any:
+        """
+        Generic generation method for strategies using Pydantic.
+        """
+        last_error = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                log.info(f"LLM call attempt {attempt}/{MAX_RETRIES}")
+                resp_json = await self._call_llm(system_prompt)
+                
+                try:
+                    raw_content = resp_json["choices"][0]["message"]["content"]
+                except (KeyError, IndexError):
+                    raw_content = json.dumps(resp_json)
+
+                # Parse JSON
+                try:
+                    data = json.loads(raw_content)
+                except json.JSONDecodeError:
+                    data = _recover_json(raw_content)
+                    if data is None:
+                        raise PlannerError("LLM returned unparseable output", {"raw": raw_content[:200]})
+                
+                # Sanitize tasks before validation (only for dict tasks)
+                if "tasks" in data and isinstance(data["tasks"], list):
+                    data["tasks"] = _sanitize_tasks(
+                        [t for t in data["tasks"] if isinstance(t, dict)]
+                    )
+
+                # Auto-repair: if data is a list of tasks, wrap it
+                if isinstance(data, list):
+                    log.warning("LLM returned a list instead of schema — auto-wrapping")
+                    # Assume list contains tasks
+                    data = {"plan_summary": "Updated plan", "tasks": data}
+                    if len(data["tasks"]) > 0 and isinstance(data["tasks"][0], dict):
+                         data["tasks"] = _sanitize_tasks(data["tasks"])
+                
+                # Auto-repair: if data is a single task dict (has title but no tasks key), wrap it
+                if isinstance(data, dict) and "tasks" not in data:
+                    # Case 1: Single Task
+                    if "title" in data:
+                        log.warning("LLM returned a single task instead of schema — auto-wrapping")
+                        data = {"plan_summary": "Updated plan", "tasks": [data]}
+                        data["tasks"] = _sanitize_tasks(data["tasks"])
+                    
+                    # Case 2: Dict of Tasks (e.g. {"1": {...}, "2": {...}})
+                    else:
+                        potential_tasks = []
+                        for k, v in data.items():
+                            if isinstance(v, dict) and ("title" in v or "category" in v):
+                                potential_tasks.append(v)
+                        
+                        if potential_tasks:
+                            log.warning(f"LLM returned a dict of {len(potential_tasks)} tasks — auto-wrapping")
+                            data = {"plan_summary": "Updated plan", "tasks": potential_tasks}
+                            data["tasks"] = _sanitize_tasks(data["tasks"])
+
+                # Validate against Pydantic model
+                return response_model(**data)
+
+            except Exception as e:
+                last_error = e
+                log.warning(f"Attempt {attempt} failed: {e}")
+                if attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+                    await asyncio.sleep(delay)
+
+        log.error(f"All retries failed: {last_error}")
+        # Return empty model or raise
+        # For safety, returning a default constructed model might be risky if required fields exist
+        # Better to raise and let fallback handle it
+        raise last_error
+
+    @timed("planner_agent")
+    async def generate_plan(
+        self,
+        profile: Dict[str, Any],
+        stats: List[Dict[str, Any]],
+        patterns: List[Dict[str, Any]],
+        context: str,
+        plan_type: str = "daily",
+    ) -> Dict[str, Any]:
+        """
+        Generates a plan via LLM with retry logic and JSON recovery.
+        Falls back to empty plan on total failure.
+        """
+        # Conditional RAG bypass for generic requests
+        should_query_rag = context.strip().lower() not in _GENERIC_REQUESTS
+        rag_context = ""
+        if self.rag_manager and should_query_rag:
+            log.info(f"Querying RAG for specific context: '{context[:50]}'")
+            rag_context = self.rag_manager.query(context)
+
+        if plan_type == PlanType.FINANCE:
+             system_prompt = self._build_finance_prompt(profile, stats, patterns, context, rag_context)
+        elif plan_type == PlanType.WEEKLY:
+             system_prompt = self._build_weekly_prompt(profile, stats, patterns, context, rag_context)
+        elif plan_type == PlanType.MONTHLY:
+             system_prompt = self._build_monthly_prompt(profile, stats, patterns, context, rag_context)
+        else:
+             system_prompt = self._build_daily_prompt(profile, stats, patterns, context, rag_context)
+
+        # Retry loop with exponential backoff
+        last_error = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                log.info(f"LLM call attempt {attempt}/{MAX_RETRIES}")
+                
+                # Use robust requests-based call
+                resp_json = await self._call_llm(system_prompt)
+                
+                # Extract content (OpenAI format or Ollama format depending on what endpoint returns)
+                # Typically /v1/chat/completions returns standard OpenAI structure
+                try:
+                    raw_content = resp_json["choices"][0]["message"]["content"]
+                except (KeyError, IndexError):
+                     # Fallback for raw Ollama or different structure
+                     raw_content = json.dumps(resp_json)
+
+                # Primary parse
+                try:
+                    plan = json.loads(raw_content)
+                except json.JSONDecodeError:
+                    log.warning(f"JSON parse failed on attempt {attempt} — trying recovery")
+                    plan = _recover_json(raw_content)
+                    if plan is None:
+                        raise PlannerError("LLM returned unparseable output", {"raw": raw_content[:200]})
+
+                # Validate minimum structure
+                if "tasks" not in plan:
+                    plan["tasks"] = []
+                if "plan_summary" not in plan:
+                    plan["plan_summary"] = "Daily plan"
+                if "clarification_questions" not in plan:
+                    plan["clarification_questions"] = []
+
+                # Hard enforcement for Daily plans only
+                if plan_type == PlanType.DAILY:
+                    plan["tasks"] = enforce_work_school_lock(plan["tasks"], profile)
+                
+                log.info(f"Plan generated ({plan_type}): {len(plan.get('tasks', []))} items")
+                return plan
+
+            except PlannerError:
+                raise  # Don't retry on parse failures after recovery attempt
+            except Exception as e:
+                last_error = e
+                log.warning(f"Attempt {attempt} failed: {e}")
+                if attempt < MAX_RETRIES:
+                    delay = RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+                    log.info(f"Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+
+        # All retries exhausted
+        log.error(f"All {MAX_RETRIES} attempts failed: {last_error}")
+        return {
+            "plan_summary": "Plan generation failed",
+            "tasks": [],
+            "clarification_questions": [
+                "The planner service encountered an error. Please try again."
+            ],
+        }
+
+    def _build_daily_prompt(
+        self,
+        profile: Dict[str, Any],
+        stats: List[Dict[str, Any]],
+        patterns: List[Dict[str, Any]],
+        context: str,
+        rag_context: str,
+    ) -> str:
+        """Constructs the compressed system prompt for DAILY plan generation."""
+        prompt = f"""Strict Daily Scheduler. Generate a realistic plan.
+RULES:
+1. HIGHEST PRIORITY: User constraints override everything.
+2. JSON ONLY. No text outside.
+3. Chronological, no overlaps, no gaps.
+4. Min task length = 30m.
+5. IF ROLE is "Working" or "Student":
+   - Window {profile.get('work_start_time')} to {profile.get('work_end_time')} is LOCKED for work/learning.
+   - Only ONE "Lunch Break" (12:00-14:00, max 60m) inside.
+6. First task starts at {profile.get('wake_time')}, last ends at {profile.get('sleep_time')}.
+
+USER PROFILE: {json.dumps(profile)}
+STATS: {json.dumps(stats)}
+PATTERNS: {json.dumps(patterns)}
+KNOWLEDGE: {rag_context}
+REQUEST: "{context}"
+
+OUTPUT JSON EXAMPLE:
+{{
+  "plan_summary": "Productive work day",
+  "tasks": [
+    {{"title": "Morning Routine", "category": "health", "start_time": "07:00", "end_time": "08:00", "priority": 1}},
+    {{"title": "Deep Work", "category": "work", "start_time": "09:00", "end_time": "11:00", "priority": 1}}
+  ],
+  "clarification_questions": []
+}}""".strip()
+        return prompt
+
+    def _build_weekly_prompt(self, profile, stats, patterns, context, rag_context):
+        return f"""Weekly Planner. Generate high-level goals and focus areas for the week.
+RULES:
+1. Focus on key outcomes, not hourly scheduling.
+2. Group tasks by category (Work, Health, Learning).
+3. Set realistic priorities.
+4. JSON ONLY.
+
+USER PROFILE: {json.dumps(profile)}
+REQUEST: "{context}"
+
+OUTPUT JSON EXAMPLE:
+{{
+  "plan_summary": "Weekly Theme/Focus",
+  "tasks": [
+    {{"title": "Complete Project X", "category": "work", "priority": 1, "task_type": "goal", "start_time": "Monday", "end_time": "Friday"}}
+  ],
+  "metadata": {{ "focus_area": "Growth", "habit_tracker": ["Read 30m", "Gym"] }},
+  "clarification_questions": []
+}}""".strip()
+
+    def _build_monthly_prompt(self, profile, stats, patterns, context, rag_context):
+        return f"""Monthly Planner. Strategic overview.
+RULES:
+1. High-level milestones and deadlines.
+2. No daily tasks.
+3. JSON ONLY.
+
+REQUEST: "{context}"
+
+OUTPUT JSON EXAMPLE:
+{{
+  "plan_summary": "Launch Product V2",
+  "tasks": [
+     {{"title": "Code Freeze", "category": "work", "priority": 1, "task_type": "milestone", "end_time": "2023-10-15"}}
+  ],
+  "metadata": {{ "theme": "Execution" }},
+  "clarification_questions": []
+}}""".strip()
+
+    def _build_finance_prompt(self, profile, stats, patterns, context, rag_context):
+        return f"""Financial Advisor. Budget and Expense Planning.
+RULES:
+1. Extract income, expenses, and savings goals.
+2. Create transactions or budget items as tasks.
+3. JSON ONLY.
+
+REQUEST: "{context}"
+
+OUTPUT JSON EXAMPLE:
+{{
+  "plan_summary": "Monthly Budget Check",
+  "tasks": [
+     {{"title": "Rent", "category": "finance", "priority": 1, "task_type": "transaction", "amount": 1500.0, "status": "pending"}}
+  ],
+  "metadata": {{ "total_budget": 5000.0, "savings_goal": 1000.0, "currency": "USD" }},
+  "clarification_questions": []
+}}""".strip()
+
+    def ask_clarification(self, profile: Dict[str, Any]) -> List[str]:
+        """Returns questions for incomplete profiles."""
+        questions = []
+        for field in ("wake_time", "sleep_time", "role"):
+            if not profile.get(field):
+                questions.append(f"What is your {field.replace('_', ' ')}?")
+        if profile.get("role") in ("Working", "Student"):
+            if not profile.get("work_start_time") or not profile.get("work_end_time"):
+                questions.append("What are your work or class start and end times?")
+        return questions
