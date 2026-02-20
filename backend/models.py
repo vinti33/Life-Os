@@ -186,9 +186,31 @@ class Plan(Document):
     class Settings:
         name = "plans"
         indexes = [
-            [("user_id", 1), ("date", -1)],
             [("user_id", 1), ("plan_type", 1), ("status", 1)],
             [("user_id", 1), ("score", -1)],
+        ]
+
+class RoutineTemplate(Document):
+    user_id: PydanticObjectId
+    name: str  # e.g. "Morning Routine - Weekdays"
+    days_of_week: List[int] = Field(default_factory=list) # 0=Mon, ... 6=Sun
+    tasks: List[Dict[str, Any]] = Field(default_factory=list)
+    # Example task dict:
+    # {
+    #   "title": "Run",
+    #   "category": "health",
+    #   "start_time": "06:00",
+    #   "end_time": "06:30",
+    #   "metrics": {"target": 5, "unit": "km", "type": "count"},
+    #   "priority": 1
+    # }
+    
+    is_active: bool = True
+    
+    class Settings:
+        name = "routine_templates"
+        indexes = [
+            [("user_id", 1), ("days_of_week", 1)],
         ]
 
 # --- 4. Feedback Layer ---

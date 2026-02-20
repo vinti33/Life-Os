@@ -4,6 +4,11 @@ from .base_strategy import PlanningStrategy
 from schemas.plan_schemas import DailyPlanSchema
 from utils.logger import get_logger
 
+
+from datetime import date, timedelta
+from beanie import PydanticObjectId
+from models import RoutineTemplate, Plan, Task, PlanStatus
+
 log = get_logger("planning.daily")
 
 class DailyStrategy(PlanningStrategy):
@@ -20,9 +25,64 @@ class DailyStrategy(PlanningStrategy):
             log.warning(f"Current plan has only {len(current_plan)} tasks — ignoring context to force FRESH generation")
             current_plan = None
 
+        # --- NEW: Adaptive Logic ---
+        user_id = profile.get("user_id")
+        template_tasks = []
+        carry_over_tasks = []
+        
+        if user_id:
+            try:
+                uid = PydanticObjectId(user_id)
+                today = date.today()
+                weekday = today.weekday()
+                
+                # 1. Fetch Template
+                # Mongo query: days_of_week contains weekday
+                template = await RoutineTemplate.find_one(
+                    RoutineTemplate.user_id == uid,
+                    {"days_of_week": weekday}
+                ).first_or_none()
+                
+                if template:
+                    template_tasks = template.tasks
+                    log.info(f"Found routine template '{template.name}' with {len(template_tasks)} tasks")
+                
+                # 2. Fetch Carry Over (Yesterday's incomplete)
+                yesterday = today - timedelta(days=1)
+                prev_plan = await Plan.find_one(
+                    Plan.user_id == uid,
+                    Plan.date == str(yesterday)
+                    # Plan.plan_type == PlanType.DAILY (implied/assumed or strict?)
+                )
+                if prev_plan:
+                    incomplete = await Task.find(
+                        Task.plan_id == prev_plan.id,
+                        Task.status == "pending" # Only pending, not missed/rescheduled?
+                        # User asked: "if not completed add those... on next day"
+                        # We can include 'missed' too if logic sets it.
+                    ).to_list()
+                    # Filter out purely internal tasks or completed
+                    incomplete = [t for t in incomplete if t.status not in ("done", "completed")]
+                    
+                    carry_over_tasks = [
+                        {
+                            "title": t.title,
+                            "category": t.category,
+                            "metrics": t.metrics,
+                            "estimated_duration": t.estimated_duration
+                        }
+                        for t in incomplete
+                    ]
+                    if carry_over_tasks:
+                        log.info(f"Found {len(carry_over_tasks)} carry-over tasks from {yesterday}")
+
+            except Exception as e:
+                log.error(f"Error in adaptive logic: {e}")
+
         rag_context = await self._query_rag(context)
 
-        system_prompt = self._build_prompt(profile, stats, patterns, context, rag_context, current_plan)
+        system_prompt = self._build_prompt(profile, stats, patterns, context, rag_context, current_plan, 
+                                         template_tasks=template_tasks, carry_over_tasks=carry_over_tasks)
 
         # Call LLM
         response = await self.llm_client.generate(system_prompt, response_model=DailyPlanSchema)
@@ -59,8 +119,16 @@ class DailyStrategy(PlanningStrategy):
 
         return response.dict()
 
-    def _build_prompt(self, profile, stats, patterns, context, rag_context, current_plan=None, strict=False):
+    def _build_prompt(self, profile, stats, patterns, context, rag_context, current_plan=None, strict=False, template_tasks=None, carry_over_tasks=None):
         current_plan_str = f"\nCURRENT PLAN:\n{json.dumps(current_plan, indent=2)}" if current_plan else ""
+        
+        template_str = ""
+        if template_tasks:
+            template_str = f"\nROUTINE TEMPLATE (Base Schedule):\n{json.dumps(template_tasks, indent=2)}\n- Use this as the SKELETON. Adjust times if needed, but keep core habits."
+
+        carry_over_str = ""
+        if carry_over_tasks:
+            carry_over_str = f"\nCARRY-OVER TASKS (MUST INCORPORATE):\n{json.dumps(carry_over_tasks, indent=2)}\n- These are unresolved from yesterday. fit them in!"
 
         wake = profile.get('wake_time', '07:00')
         sleep = profile.get('sleep_time', '23:00')
@@ -100,14 +168,16 @@ class DailyStrategy(PlanningStrategy):
 
 HARD RULES (violating any = FAILURE):
 1. Output ONLY a single valid JSON object. No text before or after.
-2. Every task MUST have: title (string), category (one of: work/health/learning/finance/personal/other), start_time (HH:MM), end_time (HH:MM), priority (integer 1-5).
+2. Every task MUST have: title (string), category (one of: work/health/learning/finance/personal/other), start_time (HH:MM), end_time (HH:MM), priority (integer 1-5). OPTIONAL: metrics (e.g. {{"target": 5, "unit": "km", "type": "count"}}).
 3. All tasks CHRONOLOGICAL. No overlaps. No gaps > 30 minutes.
 4. Minimum task duration: 30 minutes.
 5. Work hours {work_start}-{work_end}: only work/learning/lunch tasks allowed.
 
 USER PROFILE: {json.dumps(profile)}
 STATS: {json.dumps(stats)}
-PATTERNS: {json.dumps(patterns)}{current_plan_str}
+USER PROFILE: {json.dumps(profile)}
+STATS: {json.dumps(stats)}
+PATTERNS: {json.dumps(patterns)}{current_plan_str}{template_str}{carry_over_str}
 KNOWLEDGE: {rag_context}
 REQUEST: "{context}"
 
@@ -118,10 +188,10 @@ OUTPUT (JSON ONLY — copy this structure exactly):
   "plan_summary": "Productive balanced day",
   "tasks": [
     {{"title": "Wake Up & Morning Routine", "category": "health", "start_time": "{wake}", "end_time": "{self._add_hours(wake, 1)}", "priority": 2, "energy_required": "low", "estimated_duration": 60}},
-    {{"title": "Deep Work Block 1", "category": "work", "start_time": "{work_start}", "end_time": "{self._add_hours(work_start, 2)}", "priority": 1, "energy_required": "high", "estimated_duration": 120}},
+    {{"title": "Deep Work Block 1", "category": "work", "start_time": "{work_start}", "end_time": "{self._add_hours(work_start, 2)}", "priority": 1, "energy_required": "high", "estimated_duration": 120, "metrics": {{"target": 120, "unit": "defocus_minutes", "type": "duration"}}}},
     {{"title": "Lunch Break", "category": "personal", "start_time": "13:00", "end_time": "14:00", "priority": 3, "energy_required": "low", "estimated_duration": 60}},
     {{"title": "Deep Work Block 2", "category": "work", "start_time": "14:00", "end_time": "{work_end}", "priority": 1, "energy_required": "high", "estimated_duration": 180}},
-    {{"title": "Exercise", "category": "health", "start_time": "{work_end}", "end_time": "{self._add_hours(work_end, 1)}", "priority": 2, "energy_required": "high", "estimated_duration": 60}},
+    {{"title": "Exercise", "category": "health", "start_time": "{work_end}", "end_time": "{self._add_hours(work_end, 1)}", "priority": 2, "energy_required": "high", "estimated_duration": 60, "metrics": {{"target": 5, "unit": "km", "type": "count"}}}},
     {{"title": "Dinner", "category": "personal", "start_time": "{self._add_hours(work_end, 1)}", "end_time": "{self._add_hours(work_end, 2)}", "priority": 2, "energy_required": "low", "estimated_duration": 60}},
     {{"title": "Evening Wind-down", "category": "personal", "start_time": "{self._add_hours(work_end, 2)}", "end_time": "{self._subtract_hours(sleep, 0)}", "priority": 3, "energy_required": "low", "estimated_duration": 90}}
   ],

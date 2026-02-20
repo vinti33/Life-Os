@@ -16,6 +16,8 @@ import MonthlyView from '../components/dashboard/MonthlyView';
 import FinanceView from '../components/dashboard/FinanceView';
 import StatCard from '../components/dashboard/StatCard';
 import metricsService from '../services/metricsService';
+import routineService from '../services/routineService';
+import { Save } from 'lucide-react';
 
 const FONT = "'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif";
 
@@ -57,6 +59,25 @@ export default function Dashboard() {
     };
     const handleApprove = async () => { await planService.approve(currentPlan.plan_id); fetchActivePlan(activeTab); };
     const handleReject = async () => { await planService.reject(currentPlan.plan_id); fetchActivePlan(activeTab); };
+
+    const handleSaveRoutine = async () => {
+        if (!currentPlan) return;
+        const name = window.prompt("Enter Routine Name (e.g. 'Weekday Baseline'):", "My Routine");
+        if (!name) return;
+
+        const daysInput = window.prompt("Enter Days of Week (0=Mon, 6=Sun), comma separated:", "0,1,2,3,4");
+        if (!daysInput) return;
+
+        const days = daysInput.split(',').map(d => parseInt(d.trim())).filter(n => !isNaN(n));
+
+        try {
+            await routineService.createFromPlan(currentPlan.plan_id || currentPlan._id || currentPlan.id, name, days);
+            alert("Routine saved successfully! It will be used for auto-planning on these days.");
+        } catch (e) {
+            console.error(e);
+            alert("Failed to save routine.");
+        }
+    };
 
 
     // Construct the data object for the view
@@ -111,6 +132,17 @@ export default function Dashboard() {
                             {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
                             {isGenerating ? 'Architecting...' : 'Auto-Architect'}
                         </button>
+
+                        {/* Save Routine Button */}
+                        {viewData && activeTab === 'daily' && !isDraft && (
+                            <button
+                                onClick={handleSaveRoutine}
+                                className="flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors border border-slate-700 font-medium text-sm"
+                                title="Save current plan as a Routine Template"
+                            >
+                                <Save size={18} />
+                            </button>
+                        )}
                     </div>
                 </div>
 

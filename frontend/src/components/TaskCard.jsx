@@ -87,6 +87,15 @@ export default function TaskCard({ task, onStatusUpdate }) {
                         }`}>
                         {task.title}
                     </h3>
+
+                    {task.metrics && task.metrics.target && (
+                        <div className="flex items-center gap-1.5 mt-0.5 w-fit rounded px-1.5 py-0.5 bg-slate-800/40 border border-slate-700/30">
+                            <Target size={10} className="text-blue-400/80" />
+                            <span className="text-[10px] text-slate-400 font-mono tracking-tight leading-none">
+                                Target: <b className="text-slate-300 font-semibold text-[10px]">{task.metrics.target} {task.metrics.unit}</b>
+                            </span>
+                        </div>
+                    )}
                 </div>
             </div>
 

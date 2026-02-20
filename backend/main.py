@@ -210,3 +210,6 @@ from routers import history, memory, metrics
 app.include_router(history.router, prefix=api_prefix)
 app.include_router(memory.router, prefix=api_prefix)
 app.include_router(metrics.router, prefix=api_prefix)
+
+from routers import routine
+app.include_router(routine.router, prefix=api_prefix)

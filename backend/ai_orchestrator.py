@@ -87,6 +87,7 @@ class AIOrchestrator:
         patterns_obj = await Pattern.find(Pattern.user_id == user_id).to_list()
 
         profile = {
+            "user_id": str(user_id),
             "work_hours": f"{profile_obj.work_start_time} - {profile_obj.work_end_time}",
             "work_start_time": profile_obj.work_start_time,
             "work_end_time": profile_obj.work_end_time,
@@ -284,7 +285,7 @@ class AIOrchestrator:
                     currency=t.get("currency", "USD"),
                     financial_data=t if t.get("type") in ("income", "expense_fixed", "expense_variable", "savings", "debt_payment") else {},
                     subtasks=t.get("subtasks", []),
-                    metrics={"kpi": t.get("kpi_metric"), "target": t.get("target_value")} if t.get("kpi_metric") else {},
+                    metrics=t.get("metrics") or ({"kpi": t.get("kpi_metric"), "target": t.get("target_value")} if t.get("kpi_metric") else {}),
                     metadata={
                         **t.get("metadata", {}),
                         "linked_outcome_id": t.get("linked_outcome_id"),

@@ -34,6 +34,7 @@ class DailyTask(BaseModel):
     estimated_duration: Optional[int] = Field(None, description="In minutes")
     actual_duration: Optional[int] = Field(None, description="In minutes")
     completion_status: bool = False
+    metrics: Optional[Dict[str, Any]] = Field(default_factory=dict, description="e.g. {'target': 5, 'unit': 'km', 'type': 'count'}")
 
 class DailyMetrics(BaseModel):
     productivity_score: int = Field(..., ge=0, le=100)
