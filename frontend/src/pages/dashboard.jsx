@@ -32,7 +32,7 @@ function getGreeting() {
 
 export default function Dashboard() {
     const { user, profile } = useUser();
-    const { currentPlan, tasks, fetchActivePlan, generatePlan, setTasks } = usePlan();
+    const { currentPlan, tasks, fetchActivePlan, generatePlan, setTasks, error: planError, setError: setPlanError } = usePlan();
     const [isGenerating, setIsGenerating] = useState(false);
     const [activeTab, setActiveTab] = useState('daily');
     const router = useRouter();
@@ -55,7 +55,15 @@ export default function Dashboard() {
 
     const handleGenerate = async () => {
         setIsGenerating(true);
-        try { await generatePlan("Plan my " + activeTab, activeTab); } finally { setIsGenerating(false); }
+        setPlanError(null);
+        try {
+            await generatePlan("Plan my " + activeTab, activeTab);
+        } catch (e) {
+            console.error("Generation failed:", e);
+            // Error is handled by planStore and available via planError
+        } finally {
+            setIsGenerating(false);
+        }
     };
     const handleApprove = async () => { await planService.approve(currentPlan.plan_id); fetchActivePlan(activeTab); };
     const handleReject = async () => { await planService.reject(currentPlan.plan_id); fetchActivePlan(activeTab); };
@@ -105,7 +113,7 @@ export default function Dashboard() {
                             {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                         </p>
                         <h1 className="text-3xl lg:text-4xl font-black text-slate-50 tracking-tight leading-tight">
-                            {greeting.emoji} {greeting.text}, <span className="text-indigo-400">{user?.name}</span>
+                            {greeting.emoji} {greeting.text}, <span className="text-indigo-400">{user?.name || 'Protocol'}</span>
                         </h1>
                     </div>
 
@@ -145,6 +153,22 @@ export default function Dashboard() {
                         )}
                     </div>
                 </div>
+
+                {/* Error Banner */}
+                {planError && (
+                    <div className="mb-6 p-4 rounded-xl bg-red-900/10 border border-red-500/20 flex justify-between items-center animate-in slide-in-from-top-2">
+                        <div className="flex items-center gap-3 text-red-400">
+                            <XCircle size={18} />
+                            <div>
+                                <h3 className="font-bold">Protocol Alert</h3>
+                                <p className="text-xs">{planError}</p>
+                            </div>
+                        </div>
+                        <button onClick={() => setPlanError(null)} className="text-red-400/50 hover:text-red-400 transition-colors">
+                            <Loader2 size={14} className="rotate-45" />
+                        </button>
+                    </div>
+                )}
 
                 {/* Tab Navigation */}
                 <div className="flex gap-1 mb-8 bg-slate-800/30 p-1.5 rounded-xl w-fit border border-slate-700/30">

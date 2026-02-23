@@ -139,6 +139,9 @@ async def _handle_add_task(payload: Dict, user: User):
     )
     await task.insert()
     log.info(f"Task created: {task.id}")
+    
+    # Trigger Self-Healing Overlap Prevention
+    await PlanningService.apply_safety_checks(plan.id, user.id)
 
 async def _handle_reschedule(payload: Dict, user: User):
     task_id = payload.get("task_id")
@@ -152,6 +155,11 @@ async def _handle_reschedule(payload: Dict, user: User):
         payload.get("end_time")
     )
     log.info(f"Task rescheduled: {task_id}")
+    
+    # Trigger Self-Healing Overlap Prevention
+    task = await Task.get(task_id)
+    if task:
+        await PlanningService.apply_safety_checks(task.plan_id, user.id)
 
 async def _handle_delete_task(payload: Dict, user: User):
     task_id = payload.get("task_id")

@@ -169,3 +169,81 @@ class PlanningService:
         await plan.save()
         
         return summary
+    @staticmethod
+    async def apply_safety_checks(plan_id: PydanticObjectId, user_id: PydanticObjectId):
+        """
+        Enforces schedule integrity on an entire plan.
+        1. Fetches all tasks.
+        2. Fixes overlaps and enforces work locks.
+        3. Persists changes and syncs with external services.
+        """
+        from models import User
+        user = await User.get(user_id)
+        if not user or not plan_id:
+            return
+            
+        # 1. Fetch Plan & Tasks
+        plan = await Plan.get(plan_id)
+        if not plan: return
+        
+        tasks = await Task.find(Task.plan_id == plan_id).to_list()
+        if not tasks: return
+
+        # 2. Extract Profile Info (Simplified)
+        # In a real app, we'd fetch the Profile model
+        from models import UserProfile
+        profile_obj = await UserProfile.find_one(UserProfile.user_id == user_id)
+        profile = {
+            "role": profile_obj.role if profile_obj else "Other",
+            "work_start_time": profile_obj.work_start_time if profile_obj else "09:00",
+            "work_end_time": profile_obj.work_end_time if profile_obj else "17:00",
+        }
+
+        # 3. Convert to dicts for agent logic
+        task_dicts = []
+        for t in tasks:
+            d = t.dict()
+            d["id"] = str(t.id) # Preserve ID for comparison
+            task_dicts.append(d)
+
+        # 4. Resolve Overlaps & Locks
+        from agents.planner_agent import fix_overlaps, enforce_work_school_lock
+        
+        # Sort by start time first to ensure fix_overlaps works correctly
+        from agents.planner_agent import time_to_minutes
+        task_dicts.sort(key=lambda x: time_to_minutes(x.get("start_time", "00:00")))
+        
+        # Apply logic
+        fixed_tasks = enforce_work_school_lock(task_dicts, profile)
+        fixed_tasks = fix_overlaps(fixed_tasks)
+
+        # 5. Persist Changes
+        from services.calendar_service import CalendarService
+        cal = CalendarService()
+        
+        # Create indexed map for fast lookup
+        original_map = {str(t.id): t for t in tasks}
+        
+        for fixed in fixed_tasks:
+            tid_str = fixed.get("id")
+            if not tid_str: continue # Skip new tasks (shouldn't happen here)
+            
+            orig = original_map.get(tid_str)
+            if not orig: continue
+            
+            # Check if times changed
+            changed = (
+                orig.start_time != fixed["start_time"] or 
+                orig.end_time != fixed["end_time"]
+            )
+            
+            if changed:
+                log.info(f"Self-Healing: Updating {orig.title} to {fixed['start_time']}-{fixed['end_time']}")
+                orig.start_time = fixed["start_time"]
+                orig.end_time = fixed["end_time"]
+                await orig.save()
+                
+                # Sync with External Calendar
+                await cal.update_event(orig.id, orig.start_time, orig.end_time)
+
+        log.info(f"Schedule integrity check complete for plan {plan_id}")

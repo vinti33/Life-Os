@@ -139,6 +139,11 @@ async def create_task(
     await task.insert()
 
     log.info(f"Task created: id={task.id}")
+    
+    # Trigger Self-Healing Overlap Prevention
+    from services.planning_service import PlanningService
+    await PlanningService.apply_safety_checks(plan.id, current_user.id)
+    
     return {"success": True, "task": task}
 
 
@@ -185,6 +190,11 @@ async def reschedule_task(
             tid, request.new_start_time, end_time
         )
         log.info(f"Task rescheduled: id={tid} → {request.new_start_time}-{end_time}")
+        
+        # Trigger Self-Healing Overlap Prevention
+        from services.planning_service import PlanningService
+        await PlanningService.apply_safety_checks(task.plan_id, current_user.id)
+        
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

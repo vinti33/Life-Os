@@ -88,15 +88,10 @@ class AIOrchestrator:
 
         profile = {
             "user_id": str(user_id),
-            "work_hours": f"{profile_obj.work_start_time} - {profile_obj.work_end_time}",
-            "work_start_time": profile_obj.work_start_time,
-            "work_end_time": profile_obj.work_end_time,
-            "sleep_wake": f"{profile_obj.sleep_time} - {profile_obj.wake_time}",
             "wake_time": profile_obj.wake_time,
             "sleep_time": profile_obj.sleep_time,
-            "health_goals": profile_obj.health_goals,
-            "learning_goals": profile_obj.learning_goals,
-            "finance_goals": profile_obj.finance_goals,
+            "work_start_time": profile_obj.work_start_time,
+            "work_end_time": profile_obj.work_end_time,
             "role": profile_obj.role or "Working",
             "constraints": profile_obj.constraints,
         } if profile_obj else {}
@@ -258,6 +253,14 @@ class AIOrchestrator:
         final_summary = plan_data.get("plan_summary")
         final_tasks = plan_data.get("tasks", [])
         final_questions = plan_data.get("clarification_questions", [])
+
+        # LAST RESORT: Ensure no overlaps before database insertion
+        from agents.planner_agent import fix_overlaps
+        if final_tasks:
+            orig_count = len(final_tasks)
+            final_tasks = fix_overlaps(final_tasks)
+            if len(final_tasks) < orig_count:
+                log.warning(f"Self-Healing: Dropped {orig_count - len(final_tasks)} tasks during persistence due to midnight boundary")
 
         new_plan = Plan(
             user_id=user_id,

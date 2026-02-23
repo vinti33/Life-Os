@@ -32,16 +32,20 @@ class DailyStrategy(PlanningStrategy):
         
         if user_id:
             try:
-                uid = PydanticObjectId(user_id)
+                if isinstance(user_id, str):
+                    uid = PydanticObjectId(user_id)
+                else:
+                    uid = user_id
+                
                 today = date.today()
                 weekday = today.weekday()
                 
                 # 1. Fetch Template
                 # Mongo query: days_of_week contains weekday
+                # Use dictionary-based query to avoid AttributeError if model attributes aren't fully patched yet
                 template = await RoutineTemplate.find_one(
-                    RoutineTemplate.user_id == uid,
-                    {"days_of_week": weekday}
-                ).first_or_none()
+                    {"user_id": uid, "days_of_week": weekday}
+                )
                 
                 if template:
                     template_tasks = template.tasks
@@ -57,12 +61,9 @@ class DailyStrategy(PlanningStrategy):
                 if prev_plan:
                     incomplete = await Task.find(
                         Task.plan_id == prev_plan.id,
-                        Task.status == "pending" # Only pending, not missed/rescheduled?
-                        # User asked: "if not completed add those... on next day"
-                        # We can include 'missed' too if logic sets it.
+                        Task.progress < 100
                     ).to_list()
                     # Filter out purely internal tasks or completed
-                    incomplete = [t for t in incomplete if t.status not in ("done", "completed")]
                     
                     carry_over_tasks = [
                         {
@@ -77,7 +78,7 @@ class DailyStrategy(PlanningStrategy):
                         log.info(f"Found {len(carry_over_tasks)} carry-over tasks from {yesterday}")
 
             except Exception as e:
-                log.error(f"Error in adaptive logic: {e}")
+                import traceback; log.error(f"Error in adaptive logic: {e}\n{traceback.format_exc()}")
 
         rag_context = await self._query_rag(context)
 
@@ -109,15 +110,24 @@ class DailyStrategy(PlanningStrategy):
             response.tasks = fallback_tasks
             response.plan_summary = fallback_summary
         
-        # Abort Edit if critical loss of tasks
-        if current_plan and len(response.tasks) < min_required:
+        # Abort Edit if critical loss of tasks (e.g. 10 -> 1 is usually a failure)
+        # But if user explicitly asks for 'fewer', 'less', 'simple', 'minimal', or 'reduce', we should allow it.
+        is_reduction_requested = any(w in context.lower() for w in ("fewer", "less", "simple", "minimal", "reduce"))
+        
+        if current_plan and len(response.tasks) < min_required and not is_reduction_requested:
              log.error(f"Edit abandoned: result has only {len(response.tasks)} tasks vs original {len(current_plan)}. Aborting to save data.")
              raise ValueError("The AI could not update the plan safely (too few tasks generated). Please try again with specific instructions.")
 
-        # Enforce Constraints (Work/School Lock)
-        response.tasks = self._enforce_locks(response.tasks, profile)
-
-        return response.dict()
+        # FINAL: Enforce Constraints & Overlaps
+        from agents.planner_agent import enforce_work_school_lock, fix_overlaps
+        
+        task_dicts = [t.dict() for t in response.tasks]
+        task_dicts = enforce_work_school_lock(task_dicts, profile)
+        task_dicts = fix_overlaps(task_dicts)
+        
+        response_dict = response.dict()
+        response_dict["tasks"] = task_dicts
+        return response_dict
 
     def _build_prompt(self, profile, stats, patterns, context, rag_context, current_plan=None, strict=False, template_tasks=None, carry_over_tasks=None):
         current_plan_str = f"\nCURRENT PLAN:\n{json.dumps(current_plan, indent=2)}" if current_plan else ""

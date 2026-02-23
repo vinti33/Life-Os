@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/router';
 import { useUser } from '../store/userStore';
 import { Sparkles, Mail, Lock, User as UserIcon, Loader2 } from 'lucide-react';
+import { getErrorMessage } from '../utils/apiUtils';
 
 export default function Login() {
     const [isLogin, setIsLogin] = useState(true);
@@ -25,8 +26,7 @@ export default function Login() {
             }
             router.push('/dashboard');
         } catch (err) {
-            const message = err.response?.data?.detail || 'Authentication failed. Please try again.';
-            setError(message);
+            setError(getErrorMessage(err, 'Authentication failed. Please try again.'));
         } finally {
             setLoading(false);
         }

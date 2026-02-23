@@ -8,6 +8,8 @@ import clsx from 'clsx';
 const DailyView = ({ plan }) => {
     // 1. Calculate Metrics
     const metrics = useMemo(() => {
+        if (!plan?.tasks) return { totalTasks: 0, highPriority: 0, focusHours: 0 };
+
         const totalTasks = plan.tasks.length;
         const highPriority = plan.tasks.filter(t => t.priority <= 2).length;
         // Mock focus hours calculation based on tasks marked as "Deep Work" or distinct category
@@ -21,6 +23,7 @@ const DailyView = ({ plan }) => {
 
     // 2. Generate Energy Data for Chart
     const energyData = useMemo(() => {
+        if (!plan?.tasks) return [];
         return plan.tasks
             .filter(t => t.start_time) // Ensure start_time exists
             .sort((a, b) => a.start_time.localeCompare(b.start_time))
@@ -53,7 +56,7 @@ const DailyView = ({ plan }) => {
         <div className="space-y-6 animate-fadeIn">
             {/* Top Metrics Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard title="Daily Score" value={serverMetrics?.productivity_score || metrics.totalTasks > 0 ? (metrics.totalTasks - metrics.highPriority) * 2 : 0} unit="/100" trend="up" trendValue="12%" icon={Activity} color="indigo" />
+                <StatCard title="Daily Score" value={serverMetrics?.productivity_score || (metrics.totalTasks > 0 ? (metrics.totalTasks - metrics.highPriority) * 2 : 0)} unit="/100" trend="up" trendValue="12%" icon={Activity} color="indigo" />
                 <StatCard title="Focus Planned" value={metrics.focusHours} unit="hrs" trend="flat" trendValue="0%" icon={Zap} color="amber" />
                 <StatCard title="Tasks Completed" value={serverMetrics ? `${serverMetrics.completed}/${serverMetrics.total}` : metrics.totalTasks} unit="items" icon={CheckCircle} color="emerald" />
                 <StatCard title="High Priority" value={metrics.highPriority} unit="critical" icon={Clock} color="rose" />
@@ -68,12 +71,12 @@ const DailyView = ({ plan }) => {
                         </h3>
 
                         <div className="space-y-3">
-                            {plan.tasks.map((task, idx) => (
+                            {plan?.tasks?.map((task, idx) => (
                                 <div key={idx} className="flex items-start gap-4 p-3 rounded-lg hover:bg-slate-700/30 transition-colors border border-transparent hover:border-slate-700 group">
                                     {/* Time Column */}
                                     <div className="flex flex-col items-end min-w-[60px] text-right">
-                                        <span className="text-slate-300 font-mono text-sm font-medium">{task.start_time}</span>
-                                        <span className="text-slate-600 text-xs">{task.end_time}</span>
+                                        <span className="text-slate-300 font-mono text-sm font-medium">{task.start_time || '--:--'}</span>
+                                        <span className="text-slate-600 text-xs">{task.end_time || '--:--'}</span>
                                     </div>
 
                                     {/* Timeline Line */}
@@ -112,13 +115,13 @@ const DailyView = ({ plan }) => {
                                                     task.energy_required === 'medium' && "text-amber-400",
                                                     task.energy_required === 'low' && "text-emerald-400",
                                                 )}>
-                                                    <Zap size={10} /> {task.energy_required.toUpperCase()} ENERGY
+                                                    <Zap size={10} /> {String(task.energy_required).toUpperCase()} ENERGY
                                                 </span>
                                             )}
                                         </div>
                                     </div>
                                 </div>
-                            ))}
+                            )) || <p className="text-slate-500 text-sm italic">No tasks planned yet.</p>}
                         </div>
                     </div>
                 </div>
@@ -131,7 +134,7 @@ const DailyView = ({ plan }) => {
                     <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-xl p-5">
                         <h3 className="text-slate-400 text-sm font-medium uppercase tracking-wider mb-4">Time Capital</h3>
                         <div className="space-y-3">
-                            {plan.capital_allocation?.filter(c => c.resource_type === 'time').map((cap, idx) => (
+                            {plan?.capital_allocation?.filter(c => c.resource_type === 'time').map((cap, idx) => (
                                 <div key={idx} className="space-y-1">
                                     <div className="flex justify-between text-xs">
                                         <span className="text-slate-300 capitalize">{cap.category}</span>
@@ -148,7 +151,7 @@ const DailyView = ({ plan }) => {
                                     </div>
                                 </div>
                             ))}
-                            {(!plan.capital_allocation || plan.capital_allocation.length === 0) && (
+                            {(!plan?.capital_allocation || plan.capital_allocation.length === 0) && (
                                 <p className="text-xs text-slate-500 italic">No time allocation data available.</p>
                             )}
                         </div>
@@ -157,11 +160,11 @@ const DailyView = ({ plan }) => {
                     {/* Reflection / Notes Box */}
                     <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-xl p-5">
                         <h3 className="text-slate-400 text-sm font-medium uppercase tracking-wider mb-2">Daily Focus</h3>
-                        <p className="text-slate-200 italic">"{plan.plan_summary}"</p>
+                        <p className="text-slate-200 italic">"{plan?.plan_summary || 'N/A'}"</p>
                     </div>
 
                     {/* Clarification Box */}
-                    {plan.clarification_questions?.length > 0 && (
+                    {plan?.clarification_questions?.length > 0 && (
                         <div className="bg-indigo-900/20 border border-indigo-500/30 rounded-xl p-5">
                             <h3 className="text-indigo-400 text-sm font-bold uppercase tracking-wider mb-2">Pending Questions</h3>
                             <ul className="list-disc list-inside text-sm text-indigo-200/80 space-y-1">

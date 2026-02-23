@@ -20,7 +20,8 @@ _EDIT_PLAN_KEYWORDS = frozenset([
     "break", "split", "expand", "restructure", "reorganize", "organize",
     "make smaller", "more detailed", "break down", "rearrange", "simplify",
     "morning routine", "evening routine", "workout session", "adjust plan",
-    "update plan", "modify plan", "plan my"
+    "update plan", "modify plan", "plan my", "morning", "afternoon", "evening",
+    "lunch to morning", "breakfast to morning", "dinner to evening"
 ])
 
 
@@ -316,10 +317,6 @@ SUPPORTED ACTIONS:
 - GENERATE_ROUTINE: Create a brand new plan from scratch (only use when user explicitly says "create new plan" or "start over").
 - REPLY: Just a conversational text answer (no plan changes).
 
-OUTPUT MUST BE A SINGLE JSON OBJECT WITH THIS EXACT STRUCTURE:
-{{
-  "type": "ACTION_RESPONSE",
-  "message": "User-friendly confirmation message to show the user",
   "action": {{
     "type": "ADD_TASK", 
     "label": "Button Text",
@@ -327,9 +324,12 @@ OUTPUT MUST BE A SINGLE JSON OBJECT WITH THIS EXACT STRUCTURE:
   }}
 }}
 
-IMPORTANT: 
-- If the action is just to reply with text, SET "action": null. DO NOT create a REPLY action object.
-- If the user asks to "break down", "create routine", or "plan", use GENERATE_ROUTINE.
+IMPORTANT RULES:
+1. NO OVERLAPS: Ensure the suggested times do not overlap with existing tasks or each other.
+2. MEAL TIMES: Respect realistic meal windows (Breakfast ~08:00, Lunch ~13:00, Dinner ~20:00) unless explicitly asked to change (e.g., "lunch to morning").
+3. MORNING REQUIREMENTS: If a user specifies a morning requirement, ensure it is placed within the 06:00-11:00 window.
+4. If the action is just to reply with text, SET "action": null. DO NOT create a REPLY action object.
+5. If the user asks to "break down", "create routine", or "plan", use GENERATE_ROUTINE.
 
 EXAMPLES:
 User: "Add gym at 6pm"

@@ -33,8 +33,59 @@ _GENERIC_REQUESTS = frozenset([
 # Time Utilities
 # ---------------------------------------------------------------------------
 def time_to_minutes(t: str) -> int:
-    h, m = map(int, t.split(":"))
-    return h * 60 + m
+    try:
+        if not t or ":" not in t: return 0
+        h, m = map(int, t.split(":"))
+        return h * 60 + m
+    except: return 0
+
+def minutes_to_time(m: int) -> str:
+    m = max(0, min(m, 1439)) # Cap at 23:59
+    h = m // 60
+    mm = m % 60
+    return f"{h:02d}:{mm:02d}"
+
+def fix_overlaps(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Programmatically resolves overlapping tasks by shifting/shortening."""
+    if not tasks: return tasks
+    
+    # Sort by start time, and then by priority (higher priority first if times same)
+    def sort_key(x):
+        start = time_to_minutes(x.get("start_time", "00:00"))
+        priority = x.get("priority", 3)
+        return (start, priority)
+
+    tasks.sort(key=sort_key)
+    
+    fixed = []
+    for i, task in enumerate(tasks):
+        if not fixed:
+            # First task is always considered well-placed unless it's past 23:59
+            fixed.append(task)
+            continue
+            
+        prev = fixed[-1]
+        prev_end = time_to_minutes(prev.get("end_time", "00:00"))
+        curr_start = time_to_minutes(task.get("start_time", "00:00"))
+        curr_end = time_to_minutes(task.get("end_time", "00:00"))
+        
+        # If current starts before previous ends, shift it
+        if curr_start < prev_end:
+            duration = max(30, curr_end - curr_start)
+            new_start = prev_end
+            new_end = new_start + duration
+            
+            # Boundary check: If shifting pushes us into the next day, cap it
+            if new_start >= 1440:
+                log.warning(f"Task '{task.get('title')}' pushed beyond midnight — skipping")
+                continue # Or we could mark as 'missed' if there was a status field here
+                
+            task["start_time"] = minutes_to_time(new_start)
+            task["end_time"] = minutes_to_time(min(1439, new_end))
+            log.debug(f"Safety Shield: shifted '{task.get('title')}' to {task['start_time']}")
+            
+        fixed.append(task)
+    return fixed
 
 
 # ---------------------------------------------------------------------------
@@ -70,14 +121,13 @@ def enforce_work_school_lock(tasks: List[Dict[str, Any]], profile: Dict[str, Any
             continue
 
         is_work_task = task.get("category") in ("work", "learning")
-        is_lunch = (
-            task.get("title") == "Lunch Break"
+        is_break = (
+            ("break" in task.get("title", "").lower() or "lunch" in task.get("title", "").lower() or "dinner" in task.get("title", "").lower())
             and task.get("category") in ("personal", "health")
-            and 12 * 60 <= t_start <= 14 * 60
-            and (t_end - t_start) <= 60
+            and (t_end - t_start) <= 90
         )
 
-        if is_work_task or is_lunch:
+        if is_work_task or is_break:
             safe_tasks.append(task)
         else:
             log.debug(f"Enforced: stripped '{task.get('title')}' from locked zone")
@@ -101,8 +151,9 @@ def _recover_json(text: str) -> dict | None:
 
 
 def _sanitize_tasks(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Fixes invalid categories and times from LLM output."""
+    """Fixes invalid categories, times, and enums from LLM output."""
     valid_categories = {"work", "health", "learning", "finance", "personal", "other"}
+    valid_energy = {"high", "medium", "low"}
     
     for task in tasks:
         # 1. Sanitize Category
@@ -125,7 +176,30 @@ def _sanitize_tasks(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 cat = "other"
         task["category"] = cat
 
-        # 2. Sanitize Times (Handle ints/malformed strings)
+        # 2. Sanitize Priority (Force int 1-5)
+        p = task.get("priority", 3)
+        if isinstance(p, str):
+            p_lower = p.lower()
+            if "critical" in p_lower or "1" in p_lower: p = 1
+            elif "high" in p_lower or "2" in p_lower: p = 2
+            elif "low" in p_lower or "4" in p_lower: p = 4
+            elif "optional" in p_lower or "5" in p_lower: p = 5
+            else: p = 3
+        try:
+            p = int(p)
+            task["priority"] = max(1, min(5, p))
+        except (ValueError, TypeError):
+            task["priority"] = 3
+
+        # 3. Sanitize Energy Required (Enum)
+        energy = str(task.get("energy_required", "medium")).lower().strip()
+        if energy not in valid_energy:
+            if "high" in energy: energy = "high"
+            elif "low" in energy: energy = "low"
+            else: energy = "medium"
+        task["energy_required"] = energy
+
+        # 3. Sanitize Times (Handle ints/malformed strings)
         for field in ("start_time", "end_time"):
             val = task.get(field)
             if val is None:
@@ -228,6 +302,8 @@ class PlannerAgent:
                     data["tasks"] = _sanitize_tasks(
                         [t for t in data["tasks"] if isinstance(t, dict)]
                     )
+                    # Apply overlap prevention BEFORE Pydantic validation
+                    data["tasks"] = fix_overlaps(data["tasks"])
 
                 # Auto-repair: if data is a list of tasks, wrap it
                 if isinstance(data, list):
@@ -258,6 +334,10 @@ class PlannerAgent:
                             data["tasks"] = _sanitize_tasks(data["tasks"])
 
                 # Validate against Pydantic model
+                # NOTE: Overlap prevention is applied in the Strategy (e.g. DailyStrategy)
+                # or here if we have profile context. 
+                # Since 'generate' is generic, we can't easily fix overlaps without knowing the profile.
+                # However, we can at least ensure we return a valid model.
                 return response_model(**data)
 
             except Exception as e:
@@ -338,7 +418,10 @@ class PlannerAgent:
 
                 # Hard enforcement for Daily plans only
                 if plan_type == PlanType.DAILY:
+                    # 1. Enforce work/school locks
                     plan["tasks"] = enforce_work_school_lock(plan["tasks"], profile)
+                    # 2. Programmatically fix overlaps
+                    plan["tasks"] = fix_overlaps(plan["tasks"])
                 
                 log.info(f"Plan generated ({plan_type}): {len(plan.get('tasks', []))} items")
                 return plan
@@ -374,14 +457,15 @@ class PlannerAgent:
         """Constructs the compressed system prompt for DAILY plan generation."""
         prompt = f"""Strict Daily Scheduler. Generate a realistic plan.
 RULES:
-1. HIGHEST PRIORITY: User constraints override everything.
+1. HIGHEST PRIORITY: User constraints and morning requirements override everything.
 2. JSON ONLY. No text outside.
-3. Chronological, no overlaps, no gaps.
+3. Chronological, NO OVERLAPS, no gaps.
 4. Min task length = 30m.
-5. IF ROLE is "Working" or "Student":
+5. REQUIRED MEALS: Breakfast (approx 08:00), Lunch (approx 13:00), Dinner (approx 20:00).
+6. IF ROLE is "Working" or "Student":
    - Window {profile.get('work_start_time')} to {profile.get('work_end_time')} is LOCKED for work/learning.
-   - Only ONE "Lunch Break" (12:00-14:00, max 60m) inside.
-6. First task starts at {profile.get('wake_time')}, last ends at {profile.get('sleep_time')}.
+   - Only allow breaks (Lunch/Dinner/Short breaks) during this window if they are under 90 mins.
+7. First task starts at {profile.get('wake_time')}, last ends at {profile.get('sleep_time')}.
 
 USER PROFILE: {json.dumps(profile)}
 STATS: {json.dumps(stats)}
@@ -393,8 +477,9 @@ OUTPUT JSON EXAMPLE:
 {{
   "plan_summary": "Productive work day",
   "tasks": [
-    {{"title": "Morning Routine", "category": "health", "start_time": "07:00", "end_time": "08:00", "priority": 1}},
-    {{"title": "Deep Work", "category": "work", "start_time": "09:00", "end_time": "11:00", "priority": 1}}
+    {{"title": "Breakfast", "category": "health", "start_time": "08:00", "end_time": "08:30", "priority": 1}},
+    {{"title": "Deep Work", "category": "work", "start_time": "09:00", "end_time": "11:00", "priority": 1}},
+    {{"title": "Lunch", "category": "personal", "start_time": "13:00", "end_time": "14:00", "priority": 2}}
   ],
   "clarification_questions": []
 }}""".strip()

@@ -8,7 +8,7 @@ import ErrorBoundary from '../components/ErrorBoundary'; // Import ErrorBoundary
 import { taskService } from '../services/taskService';
 import { planService } from '../services/planService';
 import { Sparkles, Send, Plus, MessageSquare, ArrowLeft, Loader2, Trash2 } from 'lucide-react';
-import api from '../utils/apiUtils';
+import api, { getErrorMessage } from '../utils/apiUtils';
 
 const FONT = "'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif";
 
@@ -76,7 +76,7 @@ export default function Chat() {
                     await fetchActivePlan();
                     addLocalMessage('assistant', "✅ Routine generated! Go to your dashboard to review and approve it.");
                 } catch (err) {
-                    addLocalMessage('assistant', `❌ Failed to generate routine: ${err.response?.data?.detail || err.message}`);
+                    addLocalMessage('assistant', `❌ Failed to generate routine: ${getErrorMessage(err)}`);
                 }
             } else if (action.type === 'EDIT_PLAN') {
                 console.log("Calling EDIT_PLAN action...");
@@ -88,7 +88,7 @@ export default function Chat() {
                     await fetchActivePlan();
                     addLocalMessage('assistant', "✅ Plan updated! Check your dashboard to see the changes.");
                 } catch (err) {
-                    addLocalMessage('assistant', `❌ Failed to update plan: ${err.response?.data?.detail || err.message}`);
+                    addLocalMessage('assistant', `❌ Failed to update plan: ${getErrorMessage(err)}`);
                 }
             } else if (action.type === 'DELETE_TASK') {
                 console.log("Calling DELETE_TASK action...");
@@ -109,9 +109,7 @@ export default function Chat() {
             console.error("Processing failed in handleAction:", error);
             if (error.stack) console.error(error.stack); // Log stack trace
             console.trace("Trace from catch block:");   // Explicit trace
-            let errMsg = error.response?.data?.detail || error.message;
-            if (typeof errMsg === 'object') errMsg = JSON.stringify(errMsg);
-            addLocalMessage('assistant', `❌ Failed: ${errMsg}`);
+            addLocalMessage('assistant', `❌ Failed: ${getErrorMessage(error)}`);
         }
     };
 

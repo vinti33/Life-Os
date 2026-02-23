@@ -194,5 +194,13 @@
   {
     "text": "=current time+15:00<= today's time. If they both are same, output 'same'. Otherwise output the current time.",
     "source": "user_memory"
+  },
+  {
+    "text": "change lunch time",
+    "source": "user_memory"
+  },
+  {
+    "text": "Deep work block from 10:00 am to 1 pm",
+    "source": "user_memory"
   }
 ]
