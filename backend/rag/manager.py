@@ -136,7 +136,7 @@ class RAGManager:
             json.dump(self.texts, f)
         log.info(f"Index rebuilt: {len(self.texts)} entries, dim={dim}")
 
-    def load_index(self):
+    async def load_index(self):
         """Loads index and texts into memory (no-op if already loaded)."""
         if self.index is not None and self.texts:
             return
@@ -149,20 +149,23 @@ class RAGManager:
 
                 # Auto-rebuild if source has more entries than index
                 if os.path.exists(self.data_path):
-                    with open(self.data_path, "r") as f:
-                        source_count = len(json.load(f))
+                    def _check_stale():
+                        with open(self.data_path, "r") as f:
+                            return len(json.load(f))
+                    
+                    source_count = await asyncio.to_thread(_check_stale)
                     if source_count > len(self.texts):
                         log.warning(f"Index stale ({len(self.texts)} indexed vs {source_count} in source) — rebuilding")
-                        self.rebuild_index()
+                        await asyncio.to_thread(self.rebuild_index)
                         return
 
                 log.info(f"RAG index loaded: {len(self.texts)} entries")
             except Exception as e:
                 log.error(f"Failed to load index: {e}")
-                self.rebuild_index()
+                await asyncio.to_thread(self.rebuild_index)
         else:
             log.info("No existing index found — rebuilding from source")
-            self.rebuild_index()
+            await asyncio.to_thread(self.rebuild_index)
 
     # ...
 
@@ -175,8 +178,7 @@ class RAGManager:
         Returns the top-k most relevant text chunks, deduplicated.
         Falls back to empty string if index is unavailable.
         """
-        # load_index is sync, fast enough
-        self.load_index()
+        await self.load_index()
         if self.index is None or not self.texts:
             return ""
 
@@ -324,7 +326,7 @@ def get_rag_manager() -> RAGManager:
     global _GLOBAL_RAG_INSTANCE
     if _GLOBAL_RAG_INSTANCE is None:
         _GLOBAL_RAG_INSTANCE = RAGManager()
-        _GLOBAL_RAG_INSTANCE.load_index()
+        # Note: Index loading happens on first query to avoid blocking main thread
 
         # Register queue handler for background jobs
         queue = get_queue()

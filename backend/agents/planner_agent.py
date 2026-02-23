@@ -19,7 +19,7 @@ from utils.logger import get_logger, timed, PlannerError
 log = get_logger("planner_agent")
 
 # LLM retry configuration
-MAX_RETRIES = 2
+MAX_RETRIES = 1 # Reducing retries to fit in frontend timeout
 RETRY_BASE_DELAY_S = 1.0
 
 # Generic requests that skip RAG to save time
@@ -311,12 +311,16 @@ class PlannerAgent:
             payload = {
                 "model": settings.AI_MODEL,
                 "messages": [{"role": "system", "content": system_prompt}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.2,
-                "max_tokens": 2500,
+                "temperature": 0.1,
+                "max_tokens": 1024,
+                "options": {
+                    "num_predict": 1024,
+                    "num_ctx": 4096,
+                    "stop": ["}"] # Help it stop after JSON
+                }
             }
-            # 600s timeout to prevent hanging on slow CPUs
-            r = requests.post(url, json=payload, headers=headers, timeout=600)
+            # 900s (15 mins) timeout per attempt to match frontend
+            r = requests.post(url, json=payload, headers=headers, timeout=900)
             r.raise_for_status()
             return r.json()
 

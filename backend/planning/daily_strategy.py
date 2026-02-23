@@ -126,8 +126,20 @@ class DailyStrategy(PlanningStrategy):
         max_mins = h * 60 + m
 
         task_dicts = [t.dict() for t in response.tasks]
+        
+        # 1. Programmatic Naming Correction (Hard Guard)
+        for t in task_dicts:
+            start_m = self._time_to_minutes(t.get("start_time", "00:00"))
+            title = t.get("title", "").lower()
+            if start_m >= 17 * 60 and "afternoon" in title:
+                t["title"] = t["title"].replace("Afternoon", "Evening").replace("afternoon", "evening")
+                log.info(f"Corrected task name: {t['title']}")
+            elif start_m < 12 * 60 and ("afternoon" in title or "evening" in title):
+                t["title"] = "Morning " + t["title"].replace("Afternoon", "").replace("Evening", "").strip()
+        
+        # 2. Hard Enforcement Layers
         task_dicts = enforce_work_school_lock(task_dicts, profile)
-        task_dicts = enforce_sleep_lock(task_dicts, sleep_time)
+        task_dicts = enforce_sleep_lock(task_dicts, profile) # FIXED: Passing profile dict
         task_dicts = fix_overlaps(task_dicts, max_minutes=max_mins)
         
         response_dict = response.dict()
@@ -171,40 +183,20 @@ class DailyStrategy(PlanningStrategy):
                 f"- EXAMPLE STRUCTURE: Morning Routine {wake}-{self._add_hours(wake,1)}, then tasks every 30-120min until {sleep}."
             )
 
-        return f"""You are a strict daily life scheduler. Output JSON only. No markdown. No explanation.
+        return f"""JSON ONLY. No text.
+Rules:
+- Output: {{"plan_summary": "...", "tasks": [...]}}
+- Task: {{"title": "...", "category": "work|health|learning|personal", "start_time": "HH:MM", "end_time": "HH:MM", "priority": 1-5}}
+- Range: {wake} to {sleep}. {work_start}-{work_end} = work/learning.
+- Naming: Morning (<12:00), Afternoon (12:00-17:00), Evening (>17:00).
+- At least 8 tasks. No overlaps.
 
-HARD RULES (violating any = FAILURE):
-1. Output ONLY a single valid JSON object. No text before or after.
-2. Every task MUST have: title (string), category (one of: work/health/learning/finance/personal/other), start_time (HH:MM), end_time (HH:MM), priority (integer 1-5). OPTIONAL: metrics (e.g. {{"target": 5, "unit": "km", "type": "count"}}).
-3. All tasks CHRONOLOGICAL. No overlaps. No gaps > 30 minutes.
-4. Minimum task duration: 30 minutes.
-5. Work hours {work_start}-{work_end}: only work/learning/lunch tasks allowed.
-
-USER PROFILE: {json.dumps(profile)}
-STATS: {json.dumps(stats)}
-PATTERNS: {json.dumps(patterns)}{current_plan_str}{template_str}{carry_over_str}
-KNOWLEDGE: {rag_context}
-REQUEST: "{context}"
+PROFILE: {json.dumps(profile)}
+CONTEXT: {context}
+{current_plan_str}{template_str}{carry_over_str}
+RAG: {rag_context}
 
 {task_instruction}
-
-OUTPUT (JSON ONLY — copy this structure exactly):
-{{
-  "plan_summary": "Productive balanced day",
-  "tasks": [
-    {{"title": "Wake Up & Morning Routine", "category": "health", "start_time": "{wake}", "end_time": "{self._add_hours(wake, 1)}", "priority": 2, "energy_required": "low", "estimated_duration": 60}},
-    {{"title": "Deep Work Block 1", "category": "work", "start_time": "{work_start}", "end_time": "{self._add_hours(work_start, 2)}", "priority": 1, "energy_required": "high", "estimated_duration": 120, "metrics": {{"target": 120, "unit": "defocus_minutes", "type": "duration"}}}},
-    {{"title": "Lunch Break", "category": "personal", "start_time": "13:00", "end_time": "14:00", "priority": 3, "energy_required": "low", "estimated_duration": 60}},
-    {{"title": "Deep Work Block 2", "category": "work", "start_time": "14:00", "end_time": "{work_end}", "priority": 1, "energy_required": "high", "estimated_duration": 180}},
-    {{"title": "Exercise", "category": "health", "start_time": "{work_end}", "end_time": "{self._add_hours(work_end, 1)}", "priority": 2, "energy_required": "high", "estimated_duration": 60, "metrics": {{"target": 5, "unit": "km", "type": "count"}}}},
-    {{"title": "Dinner", "category": "personal", "start_time": "{self._add_hours(work_end, 1)}", "end_time": "{self._add_hours(work_end, 2)}", "priority": 2, "energy_required": "low", "estimated_duration": 60}},
-    {{"title": "Evening Wind-down", "category": "personal", "start_time": "{self._add_hours(work_end, 2)}", "end_time": "{self._subtract_hours(sleep, 0)}", "priority": 3, "energy_required": "low", "estimated_duration": 90}}
-  ],
-  "morning_routine": [],
-  "evening_routine": [],
-  "capital_allocation": [],
-  "clarification_questions": []
-}}
 """
 
 
@@ -231,6 +223,7 @@ OUTPUT (JSON ONLY — copy this structure exactly):
 
         tasks = []
         def add(title, category, start, end, priority=3):
+            # Consolidate very short blocks if possible or just skip if they overlap
             tasks.append(DailyTask(
                 title=title,
                 category=TaskCategory(category),
@@ -241,33 +234,35 @@ OUTPUT (JSON ONLY — copy this structure exactly):
                 estimated_duration=60,
             ))
 
-        # Morning block (wake → work_start)
-        add("Wake Up & Morning Routine", "health", wake, t(wake, 30), priority=2)
-        add("Breakfast & Coffee", "personal", t(wake, 30), t(wake, 60), priority=3)
-        if work_start > t(wake, 60):
-            add("Morning Planning", "work", t(wake, 60), work_start, priority=2)
+        # 1. Morning Block (Wake -> Work)
+        add("Wake Up & Morning Prep", "health", wake, t(wake, 45), priority=2)
+        if work_start > t(wake, 45):
+            add("Morning Focus & Breakfast", "personal", t(wake, 45), work_start, priority=2)
 
-        # Work block (work_start → work_end)
-        if role in ("Working", "Student"):
-            # morning work
-            add("Deep Work Block 1", "work", work_start, t(work_start, 120), priority=1)
-            add("Short Break", "health", t(work_start, 120), t(work_start, 135), priority=4)
-            add("Deep Work Block 2", "work", t(work_start, 135), "13:00", priority=1)
-            add("Lunch Break", "personal", "13:00", "14:00", priority=3)
-            add("Afternoon Work", "work", "14:00", t(work_end, -60), priority=1)
-            add("Team Sync / Review", "work", t(work_end, -60), work_end, priority=2)
-        else:
-            add("Focus Session 1", "work", work_start, t(work_start, 120), priority=1)
-            add("Lunch", "personal", t(work_start, 120), t(work_start, 180), priority=3)
-            add("Focus Session 2", "learning", t(work_start, 180), work_end, priority=2)
+        # 2. Focus Blocks (Work Start -> Work End)
+        middle_work = t(work_start, (self._time_to_minutes(work_end) - self._time_to_minutes(work_start)) // 2)
+        
+        add("Deep Work morning session", "work", work_start, "13:00", priority=1)
+        add("Lunch Break & Reset", "personal", "13:00", "14:00", priority=3)
+        
+        # afternoon logic
+        afternoon_end = work_end
+        if self._time_to_minutes(work_end) > 17 * 60:
+             afternoon_end = "17:00"
+        
+        add("Afternoon Execution Block", "work", "14:00", afternoon_end, priority=1)
+        
+        # If work continues past 17:00, rename it
+        if self._time_to_minutes(work_end) > 17 * 60:
+             add("Evening Wrap-up / Final Tasks", "work", "17:00", work_end, priority=2)
 
-        # Evening block (work_end → sleep)
-        add("Exercise / Walk", "health", work_end, t(work_end, 60), priority=2)
-        add("Dinner", "personal", t(work_end, 60), t(work_end, 90), priority=3)
-        add("Personal Time / Reading", "personal", t(work_end, 90), t(work_end, 150), priority=4)
-        add("Wind Down & Sleep Prep", "health", t(work_end, 150), sleep, priority=3)
+        # 3. Evening Block (Work End -> Sleep)
+        dinner_time = t(work_end, 30)
+        add("Exercise / Active Recovery", "health", work_end, dinner_time, priority=2)
+        add("Dinner & Personal Time", "personal", dinner_time, t(dinner_time, 90), priority=3)
+        add("Night Protocol & Wind Down", "health", t(dinner_time, 90), sleep, priority=3)
 
-        return tasks, f"Balanced {'workday' if role in ('Working', 'Student') else 'day'} — wake {wake}, sleep {sleep}"
+        return tasks, f"Streamlined schedule — wake {wake}, sleep {sleep}"
 
     def _enforce_locks(self, tasks: List[Any], profile: Dict[str, Any]) -> List[Any]:
         role = profile.get("role")

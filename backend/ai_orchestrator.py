@@ -211,7 +211,40 @@ class AIOrchestrator:
 
         except Exception as exc:
             log.error(f"Planning strategy failed: {exc}", exc_info=True)
-            return self._build_fallback_plan(payload["profile"], payload.get("current_plan"))
+            plan_data = self._build_fallback_plan(payload["profile"], payload.get("current_plan"))
+            
+            # CRITICAL: Always run post-processing on fallback to fix broken old plans
+            if payload.get("plan_type") == PlanType.DAILY:
+                 from planning.factory import PlanningFactory
+                 strategy = PlanningFactory.get_strategy(PlanType.DAILY, self.planner, self.rag_manager)
+                 # We need to wrap the fallback in a way that the strategy can "clean" it
+                 # Simplest way: manually call the cleanup logic if it's a daily plan
+                 from agents.planner_agent import enforce_work_school_lock, enforce_sleep_lock, fix_overlaps
+                 
+                 profile = payload["profile"]
+                 tasks = plan_data.get("tasks", [])
+                 
+                 sleep_time = profile.get("sleep_time", "23:00")
+                 h, m = map(int, sleep_time.split(':'))
+                 max_mins = h * 60 + m
+                 
+                 # Programmatic Naming and Integrity
+                 for t in tasks:
+                      try:
+                          st = t.get("start_time", "00:00")
+                          if st and ":" in st:
+                               h, m = map(int, st.split(":"))
+                               start_m = h * 60 + m
+                               if start_m >= 17 * 60 and "afternoon" in t.get("title", "").lower():
+                                    t["title"] = t["title"].lower().replace("afternoon", "evening").capitalize()
+                      except: pass
+                 
+                 tasks = enforce_work_school_lock(tasks, profile)
+                 tasks = enforce_sleep_lock(tasks, profile)
+                 tasks = fix_overlaps(tasks, max_minutes=max_mins)
+                 plan_data["tasks"] = tasks
+                 
+            return plan_data
 
     # @cache removed to avoid async wrapper issues on sync function
     def _build_fallback_plan(self, profile: Dict[str, Any], current_plan: List[Dict] = None) -> Dict[str, Any]:
