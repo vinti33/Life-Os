@@ -315,8 +315,8 @@ class PlannerAgent:
                 "temperature": 0.2,
                 "max_tokens": 2500,
             }
-            # 180s timeout to prevent hanging on slow CPUs
-            r = requests.post(url, json=payload, headers=headers, timeout=180)
+            # 600s timeout to prevent hanging on slow CPUs
+            r = requests.post(url, json=payload, headers=headers, timeout=600)
             r.raise_for_status()
             return r.json()
 

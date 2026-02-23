@@ -20,7 +20,7 @@ async def init_db():
     # We'll use a specific db name "lifeos_db".
     
     # We need to import the document models dynamically or from a centralized place
-    from models import User, UserProfile, Plan, Task, Feedback, Pattern, LongTermProgress, ChatSession, ChatMessage, UserMemory, Transaction, Budget, TaskCompletion
+    from models import User, UserProfile, Plan, Task, Feedback, Pattern, LongTermProgress, ChatSession, ChatMessage, UserMemory, Transaction, Budget, TaskCompletion, RoutineTemplate
     
     await init_beanie(
         database=client.lifeos_db,
@@ -36,6 +36,7 @@ async def init_db():
             UserMemory,
             Transaction,
             Budget,
-            TaskCompletion
+            TaskCompletion,
+            RoutineTemplate
         ]
     )

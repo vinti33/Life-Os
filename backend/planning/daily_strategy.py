@@ -119,11 +119,16 @@ class DailyStrategy(PlanningStrategy):
              raise ValueError("The AI could not update the plan safely (too few tasks generated). Please try again with specific instructions.")
 
         # FINAL: Enforce Constraints & Overlaps
-        from agents.planner_agent import enforce_work_school_lock, fix_overlaps
+        from agents.planner_agent import enforce_work_school_lock, fix_overlaps, enforce_sleep_lock
         
+        sleep_time = profile.get("sleep_time", "23:00")
+        h, m = map(int, sleep_time.split(':'))
+        max_mins = h * 60 + m
+
         task_dicts = [t.dict() for t in response.tasks]
         task_dicts = enforce_work_school_lock(task_dicts, profile)
-        task_dicts = fix_overlaps(task_dicts)
+        task_dicts = enforce_sleep_lock(task_dicts, sleep_time)
+        task_dicts = fix_overlaps(task_dicts, max_minutes=max_mins)
         
         response_dict = response.dict()
         response_dict["tasks"] = task_dicts
@@ -148,19 +153,11 @@ class DailyStrategy(PlanningStrategy):
         if current_plan:
             task_instruction = (
                 "TASK: Modify the CURRENT PLAN based on the REQUEST. This is an EDIT, not a new plan.\n"
-                "- CRITICAL: Output a valid JSON object with keys 'plan_summary' and 'tasks'. Do NOT return a list.\n"
-                "- If asked to 'break down', 'split', or 'expand' a task: REPLACE that single task with 3-6 specific sub-tasks covering the SAME time slot.\n"
-                "  Example: 'Morning Routine' 07:00-08:00 becomes: Wake Up 07:00-07:15, Brush Teeth 07:15-07:25, Shower 07:25-07:45, Get Dressed 07:45-07:55, Breakfast 07:55-08:00.\n"
-                "- If asked to 'add' something: Insert it at the appropriate time, adjusting adjacent tasks if needed.\n"
-                "- If asked to 'remove' something: Delete that task and fill the gap by extending adjacent tasks.\n"
+                "- CRITICAL: Output a valid JSON object with keys 'plan_summary' and 'tasks'.\n"
+                "- If asked to 'change' or 'rename' a task: Update the title and category while keeping the SAME time slot.\n"
+                "- If adding/removing tasks: Adjust adjacent tasks to ensure NO overlaps and NO gaps.\n"
                 "- Keep ALL other existing tasks UNCHANGED with their original times.\n"
                 "- Output ALL tasks (modified + unchanged) in the tasks array.\n"
-                "- CRITICAL: No two tasks can overlap in time.\n"
-                "EXAMPLE OUTPUT:\n"
-                "{\n"
-                '  "plan_summary": "Adjusted morning routine per request",\n'
-                '  "tasks": [ ...list of all task objects... ]\n'
-                "}"
             )
         else:
             min_tasks = 10 if strict else 8
@@ -183,8 +180,6 @@ HARD RULES (violating any = FAILURE):
 4. Minimum task duration: 30 minutes.
 5. Work hours {work_start}-{work_end}: only work/learning/lunch tasks allowed.
 
-USER PROFILE: {json.dumps(profile)}
-STATS: {json.dumps(stats)}
 USER PROFILE: {json.dumps(profile)}
 STATS: {json.dumps(stats)}
 PATTERNS: {json.dumps(patterns)}{current_plan_str}{template_str}{carry_over_str}
