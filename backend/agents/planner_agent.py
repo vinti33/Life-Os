@@ -45,7 +45,7 @@ def minutes_to_time(m: int) -> str:
     mm = m % 60
     return f"{h:02d}:{mm:02d}"
 
-def fix_overlaps(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def fix_overlaps(tasks: List[Dict[str, Any]], max_minutes: int = 1439) -> List[Dict[str, Any]]:
     """Programmatically resolves overlapping tasks by shifting/shortening."""
     if not tasks: return tasks
     
@@ -59,30 +59,43 @@ def fix_overlaps(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     
     fixed = []
     for i, task in enumerate(tasks):
+        curr_start = time_to_minutes(task.get("start_time", "00:00"))
+        curr_end = time_to_minutes(task.get("end_time", "00:00"))
+
         if not fixed:
-            # First task is always considered well-placed unless it's past 23:59
+            # First task must respect boundary
+            if curr_start >= max_minutes:
+                log.debug(f"Sleep Guard: stripping '{task.get('title')}' - starts after sleep boundary")
+                continue
+            
+            task["end_time"] = minutes_to_time(min(max_minutes, curr_end))
             fixed.append(task)
             continue
             
         prev = fixed[-1]
         prev_end = time_to_minutes(prev.get("end_time", "00:00"))
-        curr_start = time_to_minutes(task.get("start_time", "00:00"))
-        curr_end = time_to_minutes(task.get("end_time", "00:00"))
         
         # If current starts before previous ends, shift it
         if curr_start < prev_end:
-            duration = max(30, curr_end - curr_start)
+            duration = max(15, curr_end - curr_start) # Use 15m as min duration during shift
             new_start = prev_end
             new_end = new_start + duration
             
-            # Boundary check: If shifting pushes us into the next day, cap it
-            if new_start >= 1440:
-                log.warning(f"Task '{task.get('title')}' pushed beyond midnight — skipping")
-                continue # Or we could mark as 'missed' if there was a status field here
+            # Boundary check: If shifting pushes us into/past sleep boundary
+            if new_start >= max_minutes:
+                log.debug(f"Sleep Guard: stripping '{task.get('title')}' - pushed beyond boundary")
+                continue
                 
             task["start_time"] = minutes_to_time(new_start)
-            task["end_time"] = minutes_to_time(min(1439, new_end))
+            task["end_time"] = minutes_to_time(min(max_minutes, new_end))
             log.debug(f"Safety Shield: shifted '{task.get('title')}' to {task['start_time']}")
+        else:
+            # Task starts after previous, but check if it's already past boundary
+            if curr_start >= max_minutes:
+                log.debug(f"Sleep Guard: stripping '{task.get('title')}' - starts after boundary")
+                continue
+            # Ensure end time doesn't bleed past boundary
+            task["end_time"] = minutes_to_time(min(max_minutes, curr_end))
             
         fixed.append(task)
     return fixed
@@ -131,6 +144,42 @@ def enforce_work_school_lock(tasks: List[Dict[str, Any]], profile: Dict[str, Any
             safe_tasks.append(task)
         else:
             log.debug(f"Enforced: stripped '{task.get('title')}' from locked zone")
+
+    return safe_tasks
+
+
+def enforce_sleep_lock(tasks: List[Dict[str, Any]], profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Hard-strips or truncates tasks that exceed the user's sleep boundary."""
+    sleep_time_str = profile.get("sleep_time")
+    if not sleep_time_str:
+        return tasks
+        
+    try:
+        sleep_limit = time_to_minutes(sleep_time_str)
+    except (ValueError, TypeError):
+        log.warning(f"Invalid sleep_time '{sleep_time_str}' in profile — skipping lock")
+        return tasks
+
+    safe_tasks = []
+    for task in tasks:
+        try:
+            t_start = time_to_minutes(task["start_time"])
+            t_end = time_to_minutes(task["end_time"])
+        except (ValueError, TypeError, KeyError):
+            safe_tasks.append(task)
+            continue
+
+        # 1. Total strip if task starts after sleep
+        if t_start >= sleep_limit:
+            log.debug(f"Sleep Guard: stripped '{task.get('title')}' - starts after sleep at {sleep_time_str}")
+            continue
+            
+        # 2. Truncate if task ends after sleep
+        if t_end > sleep_limit:
+            log.debug(f"Sleep Guard: truncated '{task.get('title')}' at {sleep_time_str}")
+            task["end_time"] = minutes_to_time(sleep_limit)
+            
+        safe_tasks.append(task)
 
     return safe_tasks
 
@@ -420,8 +469,15 @@ class PlannerAgent:
                 if plan_type == PlanType.DAILY:
                     # 1. Enforce work/school locks
                     plan["tasks"] = enforce_work_school_lock(plan["tasks"], profile)
-                    # 2. Programmatically fix overlaps
-                    plan["tasks"] = fix_overlaps(plan["tasks"])
+                    # 2. Enforce sleep lock
+                    plan["tasks"] = enforce_sleep_lock(plan["tasks"], profile)
+                    # 3. Programmatically fix overlaps with sleep boundary
+                    sleep_limit = 1439
+                    if profile.get("sleep_time"):
+                        try:
+                            sleep_limit = time_to_minutes(profile["sleep_time"])
+                        except: pass
+                    plan["tasks"] = fix_overlaps(plan["tasks"], max_minutes=sleep_limit)
                 
                 log.info(f"Plan generated ({plan_type}): {len(plan.get('tasks', []))} items")
                 return plan
