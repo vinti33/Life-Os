@@ -194,7 +194,12 @@ async def get_active_plan(
     ]
     
     if plan_type == PlanType.DAILY:
+        from services.planning_service import PlanningService
         today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        # Autonomous Plan Injection
+        await PlanningService.ensure_daily_plan(current_user.id, today_str)
+        
         query.append(Plan.date == today_str)
 
     plan = await Plan.find(*query).sort(-Plan.id).first_or_none()

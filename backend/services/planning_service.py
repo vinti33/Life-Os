@@ -8,7 +8,7 @@ Handles cross-plan logic, including:
 """
 
 from typing import Optional, List, Dict, Any
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from beanie import PydanticObjectId
 from models import Plan, Task, PlanType, PlanStatus, TaskStatus
 from utils.logger import get_logger
@@ -247,3 +247,74 @@ class PlanningService:
                 await cal.update_event(orig.id, orig.start_time, orig.end_time)
 
         log.info(f"Schedule integrity check complete for plan {plan_id}")
+
+    @staticmethod
+    async def ensure_daily_plan(user_id: PydanticObjectId, date_str: str) -> Optional[Plan]:
+        """
+        Ensures a daily plan exists for the given date.
+        If missing, attempts to auto-generate it from active RoutineTemplates.
+        """
+        from models import Plan, Task, RoutineTemplate, PlanStatus, PlanType
+        
+        # 1. Check for existing plan
+        plan = await Plan.find_one(
+            Plan.user_id == user_id,
+            Plan.plan_type == PlanType.DAILY,
+            Plan.date == date_str
+        )
+        
+        if plan:
+            return plan
+            
+        # 2. No plan exists - Check for RoutineTemplate
+        # Parse weekday: Monday=0, Sunday=6
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            weekday = dt.weekday()
+        except Exception:
+            log.warning(f"Failed to parse date string {date_str} - skipping auto-plan")
+            return None
+            
+        template = await RoutineTemplate.find_one(
+            RoutineTemplate.user_id == user_id,
+            RoutineTemplate.is_active == True,
+            RoutineTemplate.days_of_week == weekday
+        )
+        
+        if not template:
+            log.debug(f"No active template found for user {user_id} on weekday {weekday}")
+            return None
+            
+        # 3. Create Plan from Template
+        log.info(f"Auto-generating {date_str} plan for user {user_id} from template: {template.name}")
+        
+        new_plan = Plan(
+            user_id=user_id,
+            date=date_str,
+            plan_type=PlanType.DAILY,
+            status=PlanStatus.APPROVED, # Auto-approved if from template
+            summary=f"Automated Plan: {template.name}"
+        )
+        await new_plan.insert()
+        
+        # 4. Populate Tasks
+        tasks_to_insert = []
+        for t_data in template.tasks:
+            tasks_to_insert.append(Task(
+                plan_id=new_plan.id,
+                title=t_data.get("title", "Untitled Task"),
+                category=t_data.get("category", "other"),
+                start_time=t_data.get("start_time"),
+                end_time=t_data.get("end_time"),
+                priority=t_data.get("priority", 3),
+                energy_required=t_data.get("energy_required", "medium"),
+                estimated_duration=t_data.get("estimated_duration"),
+                metrics=t_data.get("metrics", {}),
+                metadata=t_data.get("metadata", {})
+            ))
+            
+        if tasks_to_insert:
+            await Task.insert_many(tasks_to_insert)
+            log.info(f"Auto-populated {len(tasks_to_insert)} tasks for plan {new_plan.id}")
+            
+        return new_plan
