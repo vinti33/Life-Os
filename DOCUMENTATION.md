@@ -80,8 +80,10 @@ If you see a Network Error during planning:
 1.  **Timeout**: The system is configured with a **15-minute** wait window to accommodate slower CPUs. Ensure your hardware isn't under extreme load.
 2.  **Refresh**: Sometimes the browser drops the connection; a simple refresh usually fixes this.
 
-### 🔄 Slow Backend Response
-The first generation might be slow as the RAG index is built in the background. Subsequent requests will be significantly faster due to the Redis caching layer.
+### 🔄 Slow Backend Response / Timeouts
+- **Local AI Speed**: Generation can take 2-10 minutes depending on your CPU/GPU. The system has a **15-minute window** to prevent errors.
+- **Optimization**: We've tuned the AI to use **768 tokens** and a **lean profile** for maximum speed.
+- **Protocol**: If the chatbot feels stuck, try the **"Auto-Architect"** button on the dashboard for a direct override.
 
 ---
 

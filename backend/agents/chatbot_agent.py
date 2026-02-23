@@ -16,11 +16,12 @@ log = get_logger("chatbot_agent")
 _RESCHEDULE_KEYWORDS = frozenset(["move", "shift", "reschedule", "change"])
 _ADD_KEYWORDS = frozenset(["add", "create", "schedule", "new"])
 _DELETE_KEYWORDS = frozenset(["remove", "delete", "cancel", "drop"])
+_GENERATE_KEYWORDS = frozenset(["plan my day", "plan my daily", "auto-architect", "generate plan", "architect my day", "start over", "create new plan"])
 _EDIT_PLAN_KEYWORDS = frozenset([
     "break", "split", "expand", "restructure", "reorganize", "organize",
     "make smaller", "more detailed", "break down", "rearrange", "simplify",
     "morning routine", "evening routine", "workout session", "adjust plan",
-    "update plan", "modify plan", "plan my", "morning", "afternoon", "evening",
+    "update plan", "modify plan", "morning", "afternoon", "evening",
     "lunch to morning", "breakfast to morning", "dinner to evening"
 ])
 
@@ -56,6 +57,8 @@ class ChatbotAgent:
             return self._handle_delete_task(message, tasks)
         if intent == "edit_plan":
             return self._handle_edit_plan(message)
+        if intent == "generate_routine":
+            return self._handle_generate_routine(message)
         return await self._fallback(message)
 
     # -------------------------
@@ -63,6 +66,8 @@ class ChatbotAgent:
     # -------------------------
     def _detect_intent(self, msg: str) -> str:
         msg_lower = msg.lower()
+        if any(w in msg_lower for w in _GENERATE_KEYWORDS):
+            return "generate_routine"
         if any(w in msg_lower for w in _DELETE_KEYWORDS):
             return "delete_task"
         if any(w in msg_lower for w in _RESCHEDULE_KEYWORDS):
@@ -177,6 +182,24 @@ class ChatbotAgent:
             "action": {
                 "type": "EDIT_PLAN",
                 "label": "Update Plan",
+                "payload": {
+                    "context": message,
+                    "plan_type": "daily",
+                },
+            },
+        }
+    # -------------------------
+    # Generate Routine Handler
+    # -------------------------
+    def _handle_generate_routine(self, message: str) -> Dict:
+        """Triggers the full Auto-Architect pipeline (Draft/Generate)."""
+        log.info(f"Generate Routine intent detected: '{message[:60]}'")
+        return {
+            "type": "ACTION_RESPONSE",
+            "message": "I'll architect a fresh daily plan for you. Ready?",
+            "action": {
+                "type": "GENERATE_ROUTINE",
+                "label": "Auto-Architect",
                 "payload": {
                     "context": message,
                     "plan_type": "daily",

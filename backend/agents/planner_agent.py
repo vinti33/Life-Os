@@ -312,9 +312,9 @@ class PlannerAgent:
                 "model": settings.AI_MODEL,
                 "messages": [{"role": "system", "content": system_prompt}],
                 "temperature": 0.1,
-                "max_tokens": 1024,
+                "max_tokens": 768,
                 "options": {
-                    "num_predict": 1024,
+                    "num_predict": 768,
                     "num_ctx": 4096,
                     "stop": ["}"] # Help it stop after JSON
                 }

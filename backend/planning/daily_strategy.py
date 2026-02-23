@@ -174,28 +174,21 @@ class DailyStrategy(PlanningStrategy):
         else:
             min_tasks = 10 if strict else 8
             task_instruction = (
-                f"TASK: Generate a COMPLETE daily schedule from {wake} (wake) to {sleep} (sleep).\n"
-                f"- MANDATORY: At least {min_tasks} tasks, each at least 30 minutes, covering the ENTIRE day from {wake} to {sleep}.\n"
-                f"- Work block {work_start}-{work_end} must be filled with 'work' or 'learning' category tasks.\n"
-                "- Include: morning routine, focused work blocks, lunch, breaks, evening wind-down, sleep prep.\n"
-                "- Every task MUST have start_time and end_time in exact HH:MM format (e.g. 07:00, 13:30).\n"
-                "- Tasks must be back-to-back with NO gaps and NO overlaps.\n"
-                f"- EXAMPLE STRUCTURE: Morning Routine {wake}-{self._add_hours(wake,1)}, then tasks every 30-120min until {sleep}."
+                f"ACTION: Generate WHOLE day ({wake}-{sleep}).\n"
+                f"- MINIMUM {min_tasks} tasks. Back-to-back.\n"
+                f"- Work {work_start}-{work_end}: work/learning category.\n"
+                "- Include: Morning, Focus Blocks, Lunch, Breaks, Evening, Sleep Prep.\n"
             )
 
-        return f"""JSON ONLY. No text.
-Rules:
-- Output: {{"plan_summary": "...", "tasks": [...]}}
-- Task: {{"title": "...", "category": "work|health|learning|personal", "start_time": "HH:MM", "end_time": "HH:MM", "priority": 1-5}}
-- Range: {wake} to {sleep}. {work_start}-{work_end} = work/learning.
-- Naming: Morning (<12:00), Afternoon (12:00-17:00), Evening (>17:00).
-- At least 8 tasks. No overlaps.
+        # Create a leaner profile for the prompt
+        p_lean = {k: v for k, v in profile.items() if k not in ["user_id", "created_at", "updated_at", "last_login"]}
 
-PROFILE: {json.dumps(profile)}
-CONTEXT: {context}
+        return f"""JSON ONLY.
+Schema: {{"plan_summary": "...", "tasks": [{{"title": "..", "category": "work|health|learning|personal", "start_time": "HH:MM", "end_time": "HH:MM", "priority": 1-5}}]}}
+Profile: {json.dumps(p_lean)}
+Context: {context}
 {current_plan_str}{template_str}{carry_over_str}
 RAG: {rag_context}
-
 {task_instruction}
 """
 
