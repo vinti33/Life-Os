@@ -326,11 +326,27 @@ class PlannerAgent:
 
         return await asyncio.to_thread(_sync_request)
 
+    async def _ping_ollama(self) -> bool:
+        """Quickly checks if Ollama is alive."""
+        base_url = settings.OPENAI_BASE_URL.replace("/v1", "")
+        try:
+            def _sync():
+                r = requests.get(f"{base_url}/api/tags", timeout=5)
+                return r.status_code == 200
+            return await asyncio.to_thread(_sync)
+        except:
+             return False
+
     @timed("planner_agent")
     async def generate(self, system_prompt: str, response_model: Any) -> Any:
         """
         Generic generation method for strategies using Pydantic.
         """
+        # Early exit if Ollama is down to avoid 15min hang
+        if not await self._ping_ollama():
+             log.error("Ollama service is unresponsive. Aborting generation.")
+             raise PlannerError("Local AI service (Ollama) is unavailable or unresponsive.")
+
         last_error = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:

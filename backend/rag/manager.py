@@ -155,17 +155,32 @@ class RAGManager:
                     
                     source_count = await asyncio.to_thread(_check_stale)
                     if source_count > len(self.texts):
-                        log.warning(f"Index stale ({len(self.texts)} indexed vs {source_count} in source) — rebuilding")
-                        await asyncio.to_thread(self.rebuild_index)
+                        log.warning(f"Index stale ({len(self.texts)} indexed vs {source_count} in source) — triggering background rebuild")
+                        # Triggers background rebuild via queue instead of blocking
+                        queue = get_queue()
+                        if queue.is_running:
+                            await queue.enqueue("rag:rebuild_index", {})
+                        else:
+                            # If queue isn't ready, we just log it and proceed with stale index to save user time
+                            log.debug("Queue not ready for background rebuild, using stale index")
                         return
 
                 log.info(f"RAG index loaded: {len(self.texts)} entries")
             except Exception as e:
                 log.error(f"Failed to load index: {e}")
-                await asyncio.to_thread(self.rebuild_index)
+                # For critical load failure, we must rebuild once but we check queue first
+                queue = get_queue()
+                if queue.is_running:
+                    await queue.enqueue("rag:rebuild_index", {})
+                else:
+                    await asyncio.to_thread(self.rebuild_index)
         else:
-            log.info("No existing index found — rebuilding from source")
-            await asyncio.to_thread(self.rebuild_index)
+            log.info("No existing index found — triggering rebuild")
+            queue = get_queue()
+            if queue.is_running:
+                await queue.enqueue("rag:rebuild_index", {})
+            else:
+                await asyncio.to_thread(self.rebuild_index)
 
     # ...
 
@@ -268,6 +283,12 @@ class RAGManager:
         """Async wrapper for background job execution."""
         await asyncio.to_thread(self._add_memory_sync, text)
 
+    async def rebuild_index_job(self, payload: Any):
+        """Async wrapper for background index rebuild."""
+        log.info("Starting background RAG index rebuild...")
+        await asyncio.to_thread(self.rebuild_index)
+        log.info("Background RAG index rebuild complete.")
+
     def _add_memory_sync(self, text: str):
         """Internal synchronous method for adding memory - used by worker."""
         # Append to JSON source
@@ -328,9 +349,10 @@ def get_rag_manager() -> RAGManager:
         _GLOBAL_RAG_INSTANCE = RAGManager()
         # Note: Index loading happens on first query to avoid blocking main thread
 
-        # Register queue handler for background jobs
+        # Register queue handlers for background jobs
         queue = get_queue()
         queue.register_handler("rag:add_memory", _GLOBAL_RAG_INSTANCE.add_memory_job)
+        queue.register_handler("rag:rebuild_index", _GLOBAL_RAG_INSTANCE.rebuild_index_job)
 
         log.info("Singleton RAGManager created and index pre-loaded")
     return _GLOBAL_RAG_INSTANCE
